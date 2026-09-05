@@ -1,154 +1,223 @@
-/* One deliberate dark theme. The fab reads as a lit floor plan on a dark
-   ground, which is what makes the congestion overlay legible -- a heat wash on
-   a white page washes out exactly where it matters most. */
+/* Light, warm, paper-ish. The fab reads as a printed floor plan rather than a
+   telemetry dashboard.
+
+   Every colour the canvas uses is declared here too, and app.js reads them once
+   at startup. One source of truth: retinting the whole thing means editing this
+   block and nothing else. */
 :root {
-  --bg: #12141a;
-  --panel: #1a1d26;
-  --line: #2a2f3d;
-  --ink: #e6e9f0;
-  --dim: #8b93a7;
-  --accent: #6ea8fe;
+  --paper:      #faf6ef;
+  --card:       #fffdf9;
+  --rule:       #e4dacb;
+  --rule-soft:  #efe7da;
+  --ink:        #33291f;
+  --ink-soft:   #6d6154;
+  --dim:        #94897b;
+  --accent:     #b3541e;
+  --accent-ink: #fffdf9;
 
-  --veh-idle: #6b7488;
-  --veh-pickup: #6ea8fe;
-  --veh-hoist: #f0b429;
-  --veh-drop: #4ec9a0;
-  --veh-repos: #a887e8;
-  --carry: #ffd866;
+  /* Vehicle state. Must line up with VEH_COLOR in app.js, which follows
+     Snapshot's encoding in world.rs. Five hues that stay apart at 20px:
+     stone, moss, amber, rust, clay. */
+  --veh-idle:   #7b7164;
+  --veh-pickup: #587a24;
+  --veh-hoist:  #d99000;
+  --veh-drop:   #a53a17;
+  --veh-repos:  #8a6134;
+  --veh-edge:   rgba(40, 31, 22, .55);
+  /* The lot rides as a dark block. On a pale deck a cream marker vanished into
+     the amber bodies; dark reads as cargo and stays visible on all five. */
+  --carry:      #fdf6e8;
+  --carry-edge: rgba(40, 31, 22, .75);
 
-  --grid: #232837;
-  --track: #3d4457;
+  /* Fab surfaces. */
+  --deck:       #f3ece0;
+  --track:      #9c8d7c;
+  --track-fill: rgba(158, 142, 124, .07);
+  --spur:       #b3541e;
+  --spur-fill:  rgba(179, 84, 30, .10);
+  --port-in:    #6f8b3c;
+  --port-out:   #b3541e;
+  --machine-label: rgba(51, 41, 31, .74);
+  --machine-edge:  rgba(51, 41, 31, .16);
+
+  /* Congestion runs pale straw to deep rust. On paper the wash has to gain
+     saturation as well as opacity, or the busy cells and the quiet ones look
+     the same at a glance. */
+  --heat-low:  226, 168, 52;
+  --heat-high: 162, 46, 20;
+
+  --m-source: #ded2c0;
+  --m-sink:   #e2d0c9;
+  --m-litho:  #dcdcc4;
+  --m-etch:   #f1d9bf;
+  --m-cmp:    #d2ddc8;
+  --m-metro:  #ecd8b4;
+  --m-other:  #e3dacd;
 }
 
 * { box-sizing: border-box; }
 
 body {
   margin: 0;
-  background: var(--bg);
+  background: var(--paper);
   color: var(--ink);
-  font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: 13px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
 #app {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;
-  gap: 20px;
-  padding: 20px;
-  max-width: 1280px;
+  grid-template-columns: minmax(0, 1fr) 292px;
+  gap: 28px;
+  padding: 28px 24px 40px;
+  max-width: 1240px;
   margin: 0 auto;
   align-items: start;
 }
 
-header { margin-bottom: 12px; }
-h1 { margin: 0; font-size: 18px; letter-spacing: .02em; }
+header {
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--rule);
+}
+h1 {
+  margin: 0;
+  font: 500 21px/1.2 ui-serif, Georgia, "Times New Roman", serif;
+  letter-spacing: -.01em;
+}
+#mapname { margin: 4px 0 0; color: var(--dim); font-size: 12px; }
+
 h2 {
-  margin: 0 0 8px;
-  font-size: 11px;
+  margin: 0 0 10px;
+  font: 600 10.5px/1 ui-sans-serif, system-ui, sans-serif;
   text-transform: uppercase;
-  letter-spacing: .08em;
+  letter-spacing: .1em;
   color: var(--dim);
 }
-#mapname { margin: 2px 0 0; color: var(--dim); font-size: 12px; }
 
 #stage {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 12px;
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 14px;
 }
 canvas { display: block; width: 100%; height: auto; }
 
 #legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 16px;
-  margin-top: 12px;
-  color: var(--dim);
+  gap: 7px 18px;
+  margin-top: 14px;
+  color: var(--ink-soft);
   font-size: 12px;
 }
-#legend span { display: inline-flex; align-items: center; gap: 6px; }
+#legend span { display: inline-flex; align-items: center; gap: 7px; }
 .sw {
-  width: 11px;
-  height: 11px;
-  border-radius: 3px;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
   background: var(--veh-idle);
+  box-shadow: inset 0 0 0 1px var(--veh-edge);
   flex: none;
 }
 .sw[data-state="1"] { background: var(--veh-pickup); }
 .sw[data-state="2"] { background: var(--veh-hoist); }
 .sw[data-state="3"] { background: var(--veh-drop); }
 .sw[data-state="5"] { background: var(--veh-repos); }
-.sw.carrying { background: var(--carry); border-radius: 2px; }
-.sw.heat { background: linear-gradient(90deg, #3a2a3f, #d9534f); }
+/* Mirrors how it actually draws: a pale block riding on a vehicle body, not a
+   pale chip on a pale card, which was invisible. */
+.sw.carrying {
+  background: var(--veh-drop);
+  box-shadow: inset 0 0 0 1px var(--veh-edge),
+              inset 0 0 0 3px var(--carry);
+}
+.sw.heat {
+  background: linear-gradient(90deg,
+    rgba(var(--heat-low), .25), rgba(var(--heat-high), .85));
+  box-shadow: none;
+}
 
-aside { display: flex; flex-direction: column; gap: 16px; }
+aside { display: flex; flex-direction: column; gap: 18px; }
 section {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 14px;
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 16px;
 }
 
 .row { display: flex; gap: 8px; }
 button, select {
   font: inherit;
   color: var(--ink);
-  background: #232838;
-  border: 1px solid var(--line);
-  border-radius: 6px;
+  background: #fbf7f0;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
   padding: 6px 10px;
   cursor: pointer;
 }
-button:hover, select:hover { border-color: #3c455c; }
-button.primary { background: var(--accent); border-color: var(--accent); color: #0d1220; font-weight: 600; }
+button:hover, select:hover { border-color: #cfc0ad; background: #f6f0e6; }
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+button.primary:hover { background: #9e4818; border-color: #9e4818; }
 button:focus-visible, select:focus-visible, input:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 .row button { flex: 1; }
 
-.field { display: block; margin-top: 12px; }
+.field { display: block; margin-top: 14px; }
 .field > span {
   display: flex;
   justify-content: space-between;
   color: var(--dim);
-  margin-bottom: 5px;
+  margin-bottom: 6px;
 }
-.field b { color: var(--ink); font-weight: 500; }
+.field b { color: var(--ink); font-weight: 500; font-variant-numeric: tabular-nums; }
 .field select { width: 100%; }
 input[type=range] { width: 100%; accent-color: var(--accent); }
 
-.note { margin: 10px 0 0; color: var(--dim); font-size: 11.5px; }
+.note { margin: 11px 0 0; color: var(--dim); font-size: 11.5px; }
 
-dl { display: grid; grid-template-columns: 1fr auto; gap: 5px 10px; margin: 0; }
-dt { color: var(--dim); }
+dl { display: grid; grid-template-columns: 1fr auto; gap: 0 12px; margin: 0; }
+dt, dd {
+  padding: 3.5px 0;
+  border-bottom: 1px solid var(--rule-soft);
+}
+dt { color: var(--ink-soft); }
 dd {
   margin: 0;
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
-dd.warn { color: var(--veh-hoist); }
+dl > :nth-last-child(-n+2) { border-bottom: 0; }
+dd.warn { color: var(--veh-drop); font-weight: 600; }
 
 #machines { list-style: none; margin: 0; padding: 0; }
-#machines li { margin-bottom: 7px; }
+#machines li { margin-bottom: 9px; }
+#machines li:last-child { margin-bottom: 0; }
 .mrow {
   display: flex;
   justify-content: space-between;
   font-size: 12px;
-  margin-bottom: 2px;
+  margin-bottom: 3px;
 }
 .mrow .q { color: var(--dim); font-variant-numeric: tabular-nums; }
-.bar { height: 4px; background: #262b3a; border-radius: 2px; overflow: hidden; }
+.bar { height: 3px; background: var(--rule-soft); border-radius: 2px; overflow: hidden; }
 .bar > i { display: block; height: 100%; background: var(--veh-hoist); }
 
 #error {
-  margin: 20px;
-  padding: 14px;
-  border: 1px solid #7a3030;
-  background: #2a1717;
-  border-radius: 8px;
+  margin: 24px;
+  padding: 16px;
+  border: 1px solid #dcb9a4;
+  background: #fdf1e8;
+  color: #7a3212;
+  border-radius: 4px;
   white-space: pre-wrap;
-  font-family: ui-monospace, monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
 }
 

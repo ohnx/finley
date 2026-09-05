@@ -27,7 +27,9 @@ const DIRS = [
   { bit: W, dx: -1, dy: 0 },
 ];
 
-// Must match Snapshot's encoding in src/world.rs.
+// Must match Snapshot's encoding in src/world.rs. Loading and Unloading share
+// a colour: from the outside they are the same event, a vehicle sitting still
+// on the track running a hoist cycle and blocking everything behind it.
 const VEH_COLOR = ["--veh-idle", "--veh-pickup", "--veh-hoist",
                    "--veh-drop", "--veh-hoist", "--veh-repos"];
 
@@ -42,13 +44,26 @@ const M = {
 // accumulated so "0.25" really is a quarter-speed crawl rather than a stutter.
 const SPEEDS = [0.25, 1, 2, 4, 10, 40, 200];
 
-const MACHINE_FILL = {
-  source: "#2c3b52", sink: "#3b2c46", litho: "#334a63",
-  etch: "#4a3a33", cmp: "#33493d", metro: "#454063",
-};
+// Every canvas colour comes from style.css, read once here. Keeping the palette
+// in one place means a retheme touches only the stylesheet -- and reading it per
+// vehicle per frame, as this used to, is a getComputedStyle call in the hot
+// path for no reason.
+const PALETTE_KEYS = [
+  "--veh-idle", "--veh-pickup", "--veh-hoist", "--veh-drop", "--veh-repos",
+  "--veh-edge", "--carry", "--carry-edge",
+  "--deck", "--track", "--track-fill", "--spur", "--spur-fill",
+  "--port-in", "--port-out", "--machine-label", "--machine-edge",
+  "--heat-low", "--heat-high",
+  "--m-source", "--m-sink", "--m-litho", "--m-etch", "--m-cmp", "--m-metro",
+  "--m-other",
+];
 
-const css = (name) => getComputedStyle(document.documentElement)
-  .getPropertyValue(name).trim();
+function readPalette() {
+  const style = getComputedStyle(document.documentElement);
+  const p = {};
+  for (const k of PALETTE_KEYS) p[k] = style.getPropertyValue(k).trim();
+  return p;
+}
 
 const $ = (id) => document.getElementById(id);
 
@@ -136,6 +151,7 @@ class Renderer {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d");
     this.map = map;
+    this.p = readPalette();
     this.cell = 44;
     this.resize();
     addEventListener("resize", () => this.resize());
@@ -156,31 +172,31 @@ class Renderer {
   }
 
   draw(sim) {
-    const { ctx, cell } = this;
-    ctx.clearRect(0, 0, this.w, this.h);
+    const { ctx } = this;
+    ctx.fillStyle = this.p["--deck"];
+    ctx.fillRect(0, 0, this.w, this.h);
     this.drawMachines();
     this.drawCongestion(sim.congestion());
     this.drawTrack();
     this.drawPorts();
     this.drawVehicles(sim.vehicles());
-    void cell;
   }
 
   drawMachines() {
-    const { ctx, cell } = this;
+    const { ctx, cell, p } = this;
     ctx.font = "500 11px ui-sans-serif, system-ui, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     for (const m of this.map.machines) {
       const x = m.x * cell, y = m.y * cell;
       const w = m.w * cell, h = m.h * cell;
-      ctx.fillStyle = MACHINE_FILL[m.kind] || "#2f3444";
-      this.roundRect(x + 2, y + 2, w - 4, h - 4, 5);
+      ctx.fillStyle = p[`--m-${m.kind}`] || p["--m-other"];
+      this.roundRect(x + 2, y + 2, w - 4, h - 4, 3);
       ctx.fill();
-      ctx.strokeStyle = "rgba(255,255,255,.10)";
+      ctx.strokeStyle = p["--machine-edge"];
       ctx.lineWidth = 1;
       ctx.stroke();
-      ctx.fillStyle = "rgba(255,255,255,.72)";
+      ctx.fillStyle = p["--machine-label"];
       ctx.fillText(m.name, x + w / 2, y + h / 2);
     }
   }
@@ -188,13 +204,19 @@ class Renderer {
   // Congestion is the whole reason for a top-down view: traffic waves show up
   // as a red smear propagating backward from wherever a vehicle is hoisting.
   drawCongestion(cong) {
-    const { ctx, cell, map } = this;
+    const { ctx, cell, map, p } = this;
+    const low = p["--heat-low"].split(",").map(Number);
+    const high = p["--heat-high"].split(",").map(Number);
     for (let y = 0; y < map.height; y++) {
       for (let x = 0; x < map.width; x++) {
         if (!map.tracks[y][x]) continue;
-        const v = cong[y * map.width + x];
+        const v = Math.min(cong[y * map.width + x], 1);
         if (v <= 0.02) continue;
-        ctx.fillStyle = `rgba(217, 83, 79, ${Math.min(v, 1) * 0.55})`;
+        // Straw to rust, gaining opacity as it goes. On paper a wash that only
+        // gets denser reads as one flat tint; the hue shift is what separates a
+        // busy cell from a quiet one at a glance.
+        const c = low.map((lo, i) => Math.round(lo + (high[i] - lo) * v));
+        ctx.fillStyle = `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${0.07 + v * 0.42})`;
         ctx.fillRect(x * cell, y * cell, cell, cell);
       }
     }
@@ -205,7 +227,8 @@ class Renderer {
   drawTrack() {
     const { ctx, cell, map } = this;
     const spurs = this.spurSet();
-    ctx.lineWidth = 1.5;
+    const p = this.p;
+    ctx.lineWidth = 1.4;
     ctx.lineCap = "round";
     for (let y = 0; y < map.height; y++) {
       for (let x = 0; x < map.width; x++) {
@@ -215,10 +238,10 @@ class Renderer {
         const cy = y * cell + cell / 2;
         const spur = spurs.has(`${x},${y}`);
 
-        ctx.fillStyle = spur ? "rgba(168,135,232,.16)" : "rgba(255,255,255,.035)";
+        ctx.fillStyle = spur ? p["--spur-fill"] : p["--track-fill"];
         ctx.fillRect(x * cell, y * cell, cell, cell);
 
-        ctx.strokeStyle = spur ? "rgba(168,135,232,.85)" : "rgba(150,166,196,.65)";
+        ctx.strokeStyle = spur ? p["--spur"] : p["--track"];
         for (const d of DIRS) {
           if (!(bits & d.bit)) continue;
           const ex = cx + d.dx * cell * 0.42;
@@ -251,10 +274,10 @@ class Renderer {
   drawPorts() {
     const { ctx, cell } = this;
     for (const m of this.map.machines) {
-      for (const p of m.ports) {
-        const [x, y] = p.cell;
-        ctx.fillStyle = p.kind === "in"
-          ? "rgba(110,168,254,.9)" : "rgba(78,201,160,.9)";
+      for (const port of m.ports) {
+        const [x, y] = port.cell;
+        ctx.fillStyle = port.kind === "in"
+          ? this.p["--port-in"] : this.p["--port-out"];
         const s = 5;
         ctx.fillRect(x * cell + cell / 2 - s / 2, y * cell + cell / 2 - s / 2, s, s);
       }
@@ -262,7 +285,7 @@ class Renderer {
   }
 
   drawVehicles(v) {
-    const { ctx, cell } = this;
+    const { ctx, cell, p } = this;
     for (let i = 0; i < v.n; i++) {
       const cx = v.x[i] * cell + cell / 2;
       const cy = v.y[i] * cell + cell / 2;
@@ -272,16 +295,25 @@ class Renderer {
       ctx.translate(cx, cy);
       ctx.rotate(ang);
       const w = cell * 0.5, h = cell * 0.66;
-      ctx.fillStyle = css(VEH_COLOR[v.state[i]] || "--veh-idle");
+      ctx.fillStyle = p[VEH_COLOR[v.state[i]]] || p["--veh-idle"];
       this.roundRect(-w / 2, -h / 2, w, h, 3);
       ctx.fill();
-      // Nose marker, so heading is readable at a glance.
-      ctx.fillStyle = "rgba(0,0,0,.45)";
-      ctx.fillRect(-w / 2 + 2, -h / 2 + 2, w - 4, 2.5);
+      // An outline, because several of the body colours are light enough to
+      // disappear into a pale deck without one.
+      ctx.strokeStyle = p["--veh-edge"];
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      // Nose bar, so heading is readable at a glance.
+      ctx.fillStyle = p["--carry"];
+      ctx.globalAlpha = 0.75;
+      ctx.fillRect(-w / 2 + 3, -h / 2 + 3, w - 6, 2.5);
+      ctx.globalAlpha = 1;
       if (v.carrying[i]) {
-        ctx.fillStyle = css("--carry");
         const s = cell * 0.2;
+        ctx.fillStyle = p["--carry"];
         ctx.fillRect(-s / 2, -s / 2, s, s);
+        ctx.strokeStyle = p["--carry-edge"];
+        ctx.strokeRect(-s / 2, -s / 2, s, s);
       }
       ctx.restore();
     }
