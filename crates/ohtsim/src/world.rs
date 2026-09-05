@@ -773,6 +773,24 @@ impl World {
     /// memory as typed arrays, rather than serialising state every frame.
     pub fn snapshot(&self) -> Snapshot {
         let mut s = Snapshot::default();
+        self.snapshot_into(&mut s);
+        s
+    }
+
+    /// Refill an existing `Snapshot` instead of allocating a new one.
+    ///
+    /// The browser shim calls this every frame and hands JS pointers into these
+    /// arrays. Reusing the buffers keeps their capacity, so the pointers stay
+    /// put between frames -- though JS must still re-derive its typed-array
+    /// views each frame, because growing wasm memory detaches them.
+    pub fn snapshot_into(&self, s: &mut Snapshot) {
+        s.veh_x.clear();
+        s.veh_y.clear();
+        s.veh_heading.clear();
+        s.veh_carrying.clear();
+        s.veh_state.clear();
+        s.machine_load.clear();
+        s.machine_starvation.clear();
         for v in &self.vehicles {
             let (x, y) = self.grid.xy(v.cell);
             s.veh_x.push(x as u16);
@@ -793,7 +811,6 @@ impl World {
             s.machine_starvation.push(m.starvation);
         }
         s.tick = self.tick_count;
-        s
     }
 }
 
