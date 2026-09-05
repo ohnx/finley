@@ -279,7 +279,8 @@ mod tests {
     use crate::config::load_map;
 
     fn demo() -> MapConfig {
-        load_map(&std::fs::read_to_string("maps/demo_loop.json").unwrap()).unwrap()
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../maps/demo_loop.json");
+        load_map(&std::fs::read_to_string(path).unwrap()).unwrap()
     }
 
     #[test]

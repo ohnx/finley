@@ -10,11 +10,15 @@ use std::fs;
 use ohtsim::model::VehState;
 use ohtsim::{load_map, load_policy, load_scenario, MapConfig, Policy, ScenarioConfig, World};
 
+/// Maps, scenarios and policies live at the repo root, not inside the crate --
+/// they are project content shared with the web UI, not test fixtures.
+const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+
 fn fixtures(policy: &str) -> (MapConfig, ScenarioConfig, Policy) {
-    let map = load_map(&fs::read_to_string("maps/demo_loop.json").unwrap()).unwrap();
-    let scen =
-        load_scenario(&fs::read_to_string("scenarios/baseline.json").unwrap(), &map.grid).unwrap();
-    let pol = load_policy(&fs::read_to_string(format!("policies/{policy}.json")).unwrap()).unwrap();
+    let read = |rel: String| fs::read_to_string(format!("{ROOT}/{rel}")).unwrap();
+    let map = load_map(&read("maps/demo_loop.json".into())).unwrap();
+    let scen = load_scenario(&read("scenarios/baseline.json".into()), &map.grid).unwrap();
+    let pol = load_policy(&read(format!("policies/{policy}.json"))).unwrap();
     (map, scen, pol)
 }
 

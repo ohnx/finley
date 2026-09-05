@@ -5,3 +5,10 @@ version = 4
 [[package]]
 name = "ohtsim"
 version = "0.1.0"
+
+[[package]]
+name = "ohtsim-wasm"
+version = "0.1.0"
+dependencies = [
+ "ohtsim",
+]

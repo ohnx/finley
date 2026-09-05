@@ -1,0 +1,11 @@
+[package]
+name = "ohtsim-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "Browser shim for the ohtsim core: raw C ABI, no wasm-bindgen"
+
+[dependencies]
+ohtsim = { path = "../ohtsim" }
+
+[lib]
+crate-type = ["cdylib"]
