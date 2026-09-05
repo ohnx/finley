@@ -55,6 +55,8 @@ machine `w`/`h` entirely — they are presentational only.
 
 `node web/verify.mjs` checks the wasm build reproduces the native numbers.
 
+`DESIGN.md` explains why any of this is shaped the way it is.
+
 ## Running headless
 
 ```
@@ -129,7 +131,7 @@ symmetric map, so collapsing the target set to one cell let a coin flip decide
 where the whole fleet waited. It also sent every idle vehicle to the *same*
 empty spur; the losers arrived to find it taken and re-decided from where they
 stood, which is the main line. Keeping the line clear outranks the starvation
-preference — see `HANDOFF.md` for the full account.
+preference — see `DESIGN.md` for the full account.
 
 On 20 000 ticks:
 
@@ -147,7 +149,7 @@ On 20 000 ticks:
 shipped policies do not yet demonstrate a tradeoff. Both are also still
 source-limited rather than fleet-limited: the scenario offers ~240 lots over
 20 000 ticks and neither creates that many. Retuning them into a real tradeoff
-is the open question — see `HANDOFF.md`.
+is the open question — see `DESIGN.md`.
 
 ## Known rough edges
 

@@ -1,7 +1,7 @@
 //! Divergence tracer. Emits one line of world state per tick, in the same
 //! format as `reference/trace_sim.py`, so the port can be diffed against the
 //! Python reference line by line. The first differing tick is the one to
-//! investigate; this is how the three porting bugs in HANDOFF.md were found.
+//! investigate; this is how the three porting bugs in DESIGN.md were found.
 //!
 //!   cargo run --release --bin trace -- maps/demo_loop.json \
 //!       scenarios/baseline.json policies/starvation_biased.json 2000 > rs.trace

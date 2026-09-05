@@ -11,7 +11,7 @@ line by line:
     diff py.trace rs.trace | head
 
 The first differing tick is the one to investigate. This is how the three
-porting bugs in HANDOFF.md were found.
+porting bugs in DESIGN.md were found.
 
 Note that the reference has quirks that are *not* design decisions -- its
 parking tie-break falls out of CPython's set iteration order, for one -- so a

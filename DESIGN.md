@@ -1,10 +1,11 @@
-# finley / ohtsim — session handoff
+# finley — design notes
 
-Context for a fresh Claude Code session. The project was designed in a chat
-session; this captures the decisions and their reasoning so they don't get
-relitigated, plus the current state of the code.
+Why the thing is built the way it is. Most of what follows is reasoning that
+isn't recoverable from the code: options that were considered and rejected,
+invariants that look arbitrary until you know what broke without them, and
+numbers that were measured rather than guessed.
 
----
+`README.md` covers what the pieces are and how to run them. This covers why.
 
 ## What this is
 
@@ -131,56 +132,18 @@ Current merge priority rule: loaded vehicles and long-blocked vehicles win
 contested cells. Swapping this for pure FIFO changes fab behaviour a lot and is
 worth exposing as a tunable.
 
-## Current state of the code
+## Implementation notes
 
-**It compiles and the tests pass.** `cargo test` runs 14 tests green; the
-crate needed exactly one fix to build (`world.rs` never imported
-`model::Machine`). It has no dependencies, as intended.
+The core has no dependencies, deliberately: the same crate compiles to wasm for
+the UI and every byte of dependency shows in the bundle, which is also why the
+JSON parser is hand-rolled.
 
-finley is a workspace; ohtsim is one component of it.
-
-```
-crates/ohtsim/            the sim core, no dependencies
-  src/geom.rs             grid, direction bitmask, directed track graph
-  src/model.rs            vehicles, machines, lots, jobs, ports
-  src/movement.rs         movement resolution (has unit tests)
-  src/routing.rs          Dijkstra over (cell, heading), congestion-weighted
-  src/dispatch.rs         weighted scoring over (job, vehicle, destination)
-  src/policy.rs           the configuration space
-  src/world.rs            the tick loop
-  src/config.rs           JSON loading
-  src/json.rs             minimal JSON parser
-  src/validate.rs         map validation, ported from gen_map2.py
-  src/bin/headless.rs     runner; compares two policies on one job stream
-  src/bin/trace.rs        per-tick state dump, for diffing against the reference
-  tests/integration.rs    whole-tick-loop properties
-crates/ohtsim-wasm/       browser shim; raw C ABI, no wasm-bindgen
-web/                      the UI (see below)
-maps/ scenarios/ policies/    project content, shared with the UI
-reference/                Python prototypes used to validate the design;
-                          trace_sim.py is the Python side of src/bin/trace.rs
-```
-
-Run it:
-
-```
-cargo test
-cargo run --release --bin headless -- maps/demo_loop.json \
-    scenarios/baseline.json policies/default.json 20000 \
-    policies/starvation_biased.json
-
-./web/build.sh && ./web/serve.sh     # then open http://localhost:8000/web/
-```
-
-The headless runner validates the map first and exits non-zero with a problem
-list if it fails.
+Routing searches over `(cell, heading)` states rather than plain cells, because
+curve cost depends on arrival direction. Dispatch builds one distance field per
+idle vehicle rather than one Dijkstra per candidate pair; the other way round
+costs thousands of searches per tick.
 
 ## The web UI
-
-`web/` runs the real simulation in the browser, not a replay: ohtsim compiles
-to wasm and the page ticks it. Play/pause/step, a speed slider to 200 ticks per
-frame (~12,000 ticks/second in Chromium), and a policy selector that rebuilds
-the world so the two shipped policies can be compared by eye.
 
 Top-down, not the isometric this document originally specified. Isometric is
 the eventual game's look; what was needed first was a view that makes emergent
@@ -188,30 +151,36 @@ congestion legible, and a flat heat overlay does that better than a diagonal
 projection. It draws from the same snapshot data, so isometric can layer on
 later without touching the core.
 
+The page ticks the real simulation rather than replaying a recording, because
+the loop the game is about — change a weight, watch the fab respond — does not
+exist otherwise.
+
 The boundary is deliberately thin. `crates/ohtsim-wasm` is a raw C ABI rather
 than wasm-bindgen, so the core stays dependency-free and there is no JS
-toolchain: `web/build.sh` is the whole build. Nothing is serialised per frame —
-`World::snapshot_into` refills flat `Vec`s in place and the shim hands JS
-pointers into them — and static map geometry never crosses the boundary at all,
-because JS already fetched the map JSON to construct the world.
+toolchain to keep current. Two rules hold it together:
 
-`node web/verify.mjs` checks the wasm build against the native one. Both
-targets must agree: the sim is deterministic, so if they diverge, something in
-the port is target-dependent and the UI is showing a different fab from the one
-the runner reports on. The UI was checked against the runner in a real browser —
-at tick 1744 both give 22 lots created, 5 completed, 43.0% utilisation, 3.24
-mean backlog.
+- **Nothing is serialised per frame.** `World::snapshot_into` refills flat
+  `Vec`s in place and the shim hands JS pointers into them. Serialising every
+  tick would eat most of the reason for choosing Rust.
+- **Static map geometry never crosses the boundary.** JS already fetched the
+  map JSON to construct the world, so it reads track bits, machine rectangles
+  and port cells from that. One source of truth.
 
-Note that machine footprints are drawn *under* the track. Rails are
-ceiling-mounted, so running over a tool is correct rather than an overlap bug;
-the sim ignores machine `w`/`h` entirely, they are presentational only.
+On the JS side: re-derive every typed-array view from `memory.buffer` each
+frame, because growing wasm memory detaches the old ones, and treat every
+pointer as valid only until the next tick.
 
-Routing searches over `(cell, heading)` states rather than plain cells, because
-curve cost depends on arrival direction. Dispatch uses one distance field per
-idle vehicle rather than one Dijkstra per candidate pair, or scoring would cost
-thousands of searches per tick.
+Both targets must agree. The sim is deterministic, so if wasm and native
+diverge, something in the port is target-dependent and the UI is showing a
+different fab from the one the runner reports on — `web/verify.mjs` guards
+that. Checked in a real browser: at tick 1744 the page and the runner both give
+22 lots created, 5 completed, 43.0% utilisation, 3.24 mean backlog.
 
-### How it was validated before there was a compiler
+Machine footprints are drawn *under* the track. That is not an overlap bug:
+rails are ceiling-mounted, so they legitimately run over tools, and the sim
+ignores machine `w`/`h` entirely — they are presentational only.
+
+### How the design was validated before any of it compiled
 
 `reference/resolver_proto.py` prototypes the resolver with tests for the train,
 merge, rotation, and false-deadlock cases; those tests were then ported into
@@ -319,24 +288,20 @@ arrival rate until the fleet is the binding constraint rather than the source.
 - Dispatch's delivery-cost term seeds its distance field with an arbitrary legal
   heading, so it can be off by one curve. Immaterial for ranking.
 
-## Suggested next steps
+## Open questions
 
-1. ~~Get it compiling.~~ Done.
-2. ~~Port `gen_map2.py`'s validation into Rust.~~ Done — `src/validate.rs`,
-   wired into the headless runner. Still worth re-reading before building the
-   editor, since the editor should surface `Problem::cell` as a highlight.
-3. ~~The WASM shim and a browser UI.~~ Done — `crates/ohtsim-wasm` and `web/`,
-   top-down rather than isometric.
-4. **Retune the shipped policies so they show a tradeoff again** (see above).
+1. **Retune the shipped policies so they show a tradeoff again** (see above).
    This is the one that decides whether the game premise holds up, and the UI
    now makes it possible to watch what each policy actually does.
-5. Add buffers/stockers and a resource-deadlock detector.
-6. Policy editing in the UI. The weights are the game; exposing them as live
+2. Buffers and stockers, and a resource-deadlock detector.
+3. Policy editing in the UI. The weights *are* the game; exposing them as live
    sliders is the obvious next step, and needs the policy struct crossing the
    FFI boundary rather than only the config JSON.
-7. The isometric renderer, over the same snapshot data.
+4. An isometric renderer, over the same snapshot data the top-down one uses.
+5. A map editor. `validate.rs` exists so that it can surface `Problem::cell` as
+   a highlight rather than letting people draw fabs that strand vehicles.
 
-### A note on validating changes
+## Validating changes
 
 `reference/reference_sim.py` is the behavioural ground truth and it still runs:
 
