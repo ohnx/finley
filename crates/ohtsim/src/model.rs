@@ -117,6 +117,10 @@ pub struct Lot {
     pub id: LotId,
     /// Machine *kinds*, in order. Reentrant flows just repeat a kind.
     pub recipe: Vec<String>,
+    /// Which scenario recipe this lot is running. The steps are already in
+    /// `recipe`; this identifies *which* product route it is, which the UI
+    /// needs to name the remaining steps without shipping strings per frame.
+    pub recipe_id: usize,
     pub step: usize,
     pub state: LotState,
     pub created_tick: u64,

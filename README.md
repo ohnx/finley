@@ -45,9 +45,38 @@ and `WebAssembly.instantiateStreaming` needs a real MIME type.
 The page ticks the actual simulation — it is not a replay. Play/pause/step, a
 speed slider up to 200 ticks per frame (about 12,000 ticks/second in Chromium),
 and a policy selector that rebuilds the world so the two shipped policies can be
-compared by eye. Track is drawn as one-way arrows, congestion as a heat wash
-that shows traffic waves propagating backward from a hoisting vehicle, and spur
-cells are tinted so parking reads as distinct from the main line.
+compared by eye.
+
+On the map: track is drawn as one-way arrows, congestion as a heat wash that
+shows traffic waves propagating backward from a hoisting vehicle, and spur cells
+are tinted so parking reads as distinct from the main line. Ports are
+arrowheads pointing the way a lot travels — into the tool for an in-port, out of
+it for an out-port — and filled when a lot is sitting there, which is where
+backpressure shows up first.
+
+Four tabs alongside:
+
+- **Lots** — every lot in the fab with its recipe progress, what tool kind it
+  needs next, and where it is (in a tool, riding an OHT, or waiting at a named
+  port). Click one to follow it: it stays ringed on the map as it moves, on
+  whichever tab you are on.
+- **OHTs** — all eight vehicles, what each is doing, what it carries and where
+  it is headed. Click one to draw its planned route, which is how a congestion
+  detour becomes visible. Hovering a vehicle on the map shows the same.
+- **Tools** — utilisation (share of ticks with a lot in process) and queue
+  depth per machine. Source and sink show "—": nothing is ever *in process* at
+  either, so a percentage there would read 100% and mean nothing.
+- **Stats** — the cycle-time distribution as a histogram with p50 and p95
+  marked, because two policies can agree on the mean and disagree completely on
+  the tail, plus the throughput counters.
+
+Vehicle states are named for what you can see rather than for the leg of the
+job: a vehicle is **fetching** while it drives empty toward a pickup and
+**delivering** while it drives loaded toward a dropoff, with **hoisting** for
+the 20-tick cycle at either end. (The core calls these `ToPickup` and
+`ToDropoff`. Because `carrying` is true exactly during the dropoff leg, the
+colour already says whether a vehicle is loaded, so the UI does not draw a
+separate cargo marker.)
 
 Machine footprints sit *under* the track. That is not an overlap bug: rails are
 ceiling-mounted, so they legitimately run over tools, and the sim ignores

@@ -4,60 +4,87 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>finley — ohtsim</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%2312141a'/%3E%3Crect x='4' y='3' width='8' height='6' rx='1.5' fill='%236ea8fe'/%3E%3Crect x='6' y='10' width='4' height='3' fill='%23ffd866'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23faf6ef'/%3E%3Crect x='4' y='3' width='8' height='6' rx='1.5' fill='%23b3541e'/%3E%3Crect x='6' y='10' width='4' height='3' fill='%23d99000'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<header id="bar">
+  <div class="brand">
+    <h1>ohtsim</h1>
+    <p id="mapname">loading…</p>
+  </div>
+  <div class="controls">
+    <div class="tick"><b id="tickval">0</b><span>tick</span></div>
+    <div class="group">
+      <button id="play" class="primary">Pause</button>
+      <button id="step">Step</button>
+      <button id="reset">Reset</button>
+    </div>
+    <label class="inline">
+      <span>Speed</span>
+      <input id="speed" type="range" min="0" max="6" step="1" value="3">
+      <b id="speedlabel">4×</b>
+    </label>
+    <label class="inline">
+      <span>Policy</span>
+      <select id="policy">
+        <option value="default">default</option>
+        <option value="starvation_biased">starvation_biased</option>
+      </select>
+    </label>
+  </div>
+</header>
+
 <div id="app">
   <main>
-    <header>
-      <h1>ohtsim</h1>
-      <p id="mapname">loading…</p>
-    </header>
     <div id="stage">
       <canvas id="fab"></canvas>
+      <div id="tip" hidden></div>
     </div>
     <div id="legend">
-      <span><i class="sw" data-state="0"></i>idle</span>
-      <span><i class="sw" data-state="1"></i>to pickup</span>
-      <span><i class="sw" data-state="2"></i>hoisting</span>
-      <span><i class="sw" data-state="3"></i>to dropoff</span>
+      <span><i class="sw" data-state="0"></i>parked</span>
       <span><i class="sw" data-state="5"></i>repositioning</span>
-      <span><i class="sw carrying"></i>carrying a lot</span>
+      <span><i class="sw" data-state="1"></i>fetching (empty)</span>
+      <span><i class="sw" data-state="3"></i>delivering (loaded)</span>
+      <span><i class="sw" data-state="2"></i>hoisting</span>
+      <span><i class="sw port-in"></i>in port</span>
+      <span><i class="sw port-out"></i>out port</span>
       <span><i class="sw heat"></i>congestion</span>
     </div>
+    <p class="note" id="selnote">Click a vehicle to follow it. Rails are one-way and vehicles cannot overtake.</p>
   </main>
 
   <aside>
-    <section id="controls">
-      <div class="row">
-        <button id="play" class="primary">Pause</button>
-        <button id="step">Step</button>
-        <button id="reset">Reset</button>
-      </div>
-      <label class="field">
-        <span>Speed <b id="speedlabel">4 ticks/frame</b></span>
-        <input id="speed" type="range" min="0" max="6" step="1" value="3">
-      </label>
-      <label class="field">
-        <span>Policy</span>
-        <select id="policy">
-          <option value="default">default</option>
-          <option value="starvation_biased">starvation_biased</option>
-        </select>
-      </label>
-      <p class="note" id="profile"></p>
+    <nav id="tabs" role="tablist">
+      <button role="tab" data-tab="lots" aria-selected="true">Lots</button>
+      <button role="tab" data-tab="ohts" aria-selected="false">OHTs</button>
+      <button role="tab" data-tab="machines" aria-selected="false">Tools</button>
+      <button role="tab" data-tab="stats" aria-selected="false">Stats</button>
+    </nav>
+
+    <section id="panel-lots" class="panel">
+      <p class="note" id="lotsummary"></p>
+      <div id="lotdetail" hidden></div>
+      <ul id="lots" class="rows"></ul>
     </section>
 
-    <section>
-      <h2>Throughput</h2>
+    <section id="panel-ohts" class="panel" hidden>
+      <p class="note">Click one to draw its planned route.</p>
+      <ul id="ohts" class="rows"></ul>
+    </section>
+
+    <section id="panel-machines" class="panel" hidden>
+      <p class="note">Utilisation is the share of ticks with a lot in process.
+        Queue counts lots waiting on in-ports plus lots in process.</p>
+      <ul id="machines" class="rows"></ul>
+    </section>
+
+    <section id="panel-stats" class="panel" hidden>
+      <h2>Cycle time</h2>
+      <div id="histwrap"><canvas id="hist"></canvas></div>
+      <p class="note" id="histnote"></p>
+      <h2 class="spaced">Throughput</h2>
       <dl id="metrics"></dl>
-    </section>
-
-    <section>
-      <h2>Tools</h2>
-      <p class="note">Bar is recent starvation; the number is queue depth.</p>
-      <ul id="machines"></ul>
     </section>
   </aside>
 </div>

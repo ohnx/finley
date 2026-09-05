@@ -23,6 +23,7 @@
 use std::alloc::{alloc, dealloc, Layout};
 use std::cell::RefCell;
 
+use ohtsim::model::{LotState, VehState};
 use ohtsim::world::Snapshot;
 use ohtsim::{load_map, load_policy, load_scenario, World};
 
@@ -41,15 +42,67 @@ fn set_error(msg: String) {
 /// below and with the reader in `web/app.js`.
 pub const METRIC_COUNT: usize = 13;
 
+/// Where a lot currently sits. `LOT_AT_PORT` carries a machine and a port in
+/// `lot_a`/`lot_b`; the other two carry a machine or a vehicle in `lot_a`.
+pub const LOT_AT_PORT: u8 = 0;
+pub const LOT_IN_TRANSIT: u8 = 1;
+pub const LOT_PROCESSING: u8 = 2;
+
+/// Per-frame view of the lots still in the fab. Done lots are dropped: the
+/// world keeps every lot it ever made, but only the live ones are worth
+/// drawing, and there are around twenty at a time on the demo map.
+#[derive(Default)]
+struct Lots {
+    id: Vec<u32>,
+    recipe: Vec<u8>,
+    step: Vec<u8>,
+    steps_total: Vec<u8>,
+    place: Vec<u8>,
+    a: Vec<u16>,
+    b: Vec<u16>,
+    wait: Vec<u32>,
+    priority: Vec<f32>,
+}
+
+/// Per-frame view of what each vehicle is working on. `-1` means none.
+#[derive(Default)]
+struct Targets {
+    machine: Vec<i16>,
+    port: Vec<i16>,
+    lot: Vec<i32>,
+}
+
 pub struct Sim {
     world: World,
     snap: Snapshot,
     metrics: [f64; METRIC_COUNT],
+    lots: Lots,
+    targets: Targets,
+    /// Lot sitting on each port, `-1` for empty, flattened machine-major in the
+    /// same order the map JSON lists them so JS can index it directly.
+    port_lot: Vec<i32>,
+    /// Cumulative ticks each machine spent with nothing in process. The UI
+    /// turns this into a utilisation percentage.
+    machine_idle: Vec<u32>,
+    /// Completed lots' cycle times, as f64 to spare JS the BigInt dance.
+    cycles: Vec<f64>,
 }
 
 impl Sim {
     fn refresh(&mut self) {
         self.world.snapshot_into(&mut self.snap);
+        self.refresh_lots();
+        self.refresh_targets();
+        self.refresh_ports();
+
+        self.machine_idle.clear();
+        self.machine_idle
+            .extend(self.world.machines.iter().map(|m| m.idle_ticks as u32));
+
+        self.cycles.clear();
+        self.cycles
+            .extend(self.world.metrics.cycle_times.iter().map(|&c| c as f64));
+
         let m = &self.world.metrics;
         self.metrics = [
             self.world.tick_count as f64,
@@ -70,6 +123,88 @@ impl Sim {
                 .filter(|v| !v.is_idle())
                 .count() as f64,
         ];
+    }
+
+    fn refresh_lots(&mut self) {
+        let l = &mut self.lots;
+        l.id.clear();
+        l.recipe.clear();
+        l.step.clear();
+        l.steps_total.clear();
+        l.place.clear();
+        l.a.clear();
+        l.b.clear();
+        l.wait.clear();
+        l.priority.clear();
+
+        let now = self.world.tick_count;
+        for lot in &self.world.lots {
+            let (place, a, b) = match lot.state {
+                LotState::Done => continue,
+                LotState::AtPort(m, p) => (LOT_AT_PORT, m as u16, p as u16),
+                LotState::InTransit(v) => (LOT_IN_TRANSIT, v as u16, 0),
+                LotState::Processing(m) => (LOT_PROCESSING, m as u16, 0),
+            };
+            l.id.push(lot.id as u32);
+            l.recipe.push(lot.recipe_id as u8);
+            l.step.push(lot.step.min(255) as u8);
+            l.steps_total.push(lot.recipe.len().min(255) as u8);
+            l.place.push(place);
+            l.a.push(a);
+            l.b.push(b);
+            // A lot in process or in transit is not waiting; the clock only
+            // means something for one parked on a port.
+            l.wait.push(if place == LOT_AT_PORT {
+                lot.wait_ticks(now).min(u32::MAX as u64) as u32
+            } else {
+                0
+            });
+            l.priority.push(lot.priority);
+        }
+    }
+
+    fn refresh_targets(&mut self) {
+        let t = &mut self.targets;
+        t.machine.clear();
+        t.port.clear();
+        t.lot.clear();
+        for v in &self.world.vehicles {
+            // Which port this vehicle is driving at: the pickup while it is
+            // still empty, the destination once it is loaded.
+            let job = match v.state {
+                VehState::ToPickup(j) | VehState::Loading(j) => Some((j, false)),
+                VehState::ToDropoff(j) | VehState::Unloading(j) => Some((j, true)),
+                VehState::Idle | VehState::Repositioning => None,
+            };
+            let dest = job.and_then(|(j, loaded)| {
+                let job = &self.world.jobs[j];
+                if loaded {
+                    job.to
+                } else {
+                    Some(job.from)
+                }
+            });
+            match dest {
+                Some((m, p)) => {
+                    t.machine.push(m as i16);
+                    t.port.push(p as i16);
+                }
+                None => {
+                    t.machine.push(-1);
+                    t.port.push(-1);
+                }
+            }
+            t.lot.push(v.carrying.map(|l| l as i32).unwrap_or(-1));
+        }
+    }
+
+    fn refresh_ports(&mut self) {
+        self.port_lot.clear();
+        for m in &self.world.machines {
+            for p in &m.ports {
+                self.port_lot.push(p.lot.map(|l| l as i32).unwrap_or(-1));
+            }
+        }
     }
 }
 
@@ -150,6 +285,11 @@ pub unsafe extern "C" fn oht_new(
             world: World::new(map, scenario, policy),
             snap: Snapshot::default(),
             metrics: [0.0; METRIC_COUNT],
+            lots: Lots::default(),
+            targets: Targets::default(),
+            port_lot: Vec::new(),
+            machine_idle: Vec::new(),
+            cycles: Vec::new(),
         })
     };
     match build() {
@@ -251,4 +391,61 @@ accessor!(oht_metrics, *const f64, |s| s.metrics.as_ptr());
 #[no_mangle]
 pub extern "C" fn oht_metric_count() -> usize {
     METRIC_COUNT
+}
+
+// ---------------------------------------------------------------------------
+// Lots, targets, ports, machine utilisation, cycle times
+// ---------------------------------------------------------------------------
+
+accessor!(oht_lot_count, usize, |s| s.lots.id.len());
+accessor!(oht_lot_id, *const u32, |s| s.lots.id.as_ptr());
+accessor!(oht_lot_recipe, *const u8, |s| s.lots.recipe.as_ptr());
+accessor!(oht_lot_step, *const u8, |s| s.lots.step.as_ptr());
+accessor!(oht_lot_steps_total, *const u8, |s| s.lots.steps_total.as_ptr());
+accessor!(oht_lot_place, *const u8, |s| s.lots.place.as_ptr());
+accessor!(oht_lot_a, *const u16, |s| s.lots.a.as_ptr());
+accessor!(oht_lot_b, *const u16, |s| s.lots.b.as_ptr());
+accessor!(oht_lot_wait, *const u32, |s| s.lots.wait.as_ptr());
+accessor!(oht_lot_priority, *const f32, |s| s.lots.priority.as_ptr());
+
+accessor!(oht_veh_target_machine, *const i16, |s| s.targets.machine.as_ptr());
+accessor!(oht_veh_target_port, *const i16, |s| s.targets.port.as_ptr());
+accessor!(oht_veh_lot, *const i32, |s| s.targets.lot.as_ptr());
+
+accessor!(oht_port_count, usize, |s| s.port_lot.len());
+accessor!(oht_port_lot, *const i32, |s| s.port_lot.as_ptr());
+
+accessor!(oht_machine_idle_ticks, *const u32, |s| s.machine_idle.as_ptr());
+
+accessor!(oht_cycle_count, usize, |s| s.cycles.len());
+accessor!(oht_cycle_times, *const f64, |s| s.cycles.as_ptr());
+
+/// The planned route of one vehicle, as cell ids, next hop first. Separate from
+/// the bulk accessors because it is per-vehicle and only the selected one is
+/// ever drawn.
+///
+/// # Safety
+/// `sim` must be live; the pointer is valid until the next call that mutates
+/// the world.
+#[no_mangle]
+pub unsafe extern "C" fn oht_veh_route(sim: *const Sim, v: usize) -> *const usize {
+    match sim.as_ref() {
+        Some(s) => s
+            .world
+            .vehicles
+            .get(v)
+            .map(|veh| veh.route.as_ptr())
+            .unwrap_or(std::ptr::null()),
+        None => std::ptr::null(),
+    }
+}
+
+/// # Safety
+/// `sim` must be live.
+#[no_mangle]
+pub unsafe extern "C" fn oht_veh_route_len(sim: *const Sim, v: usize) -> usize {
+    match sim.as_ref() {
+        Some(s) => s.world.vehicles.get(v).map(|veh| veh.route.len()).unwrap_or(0),
+        None => 0,
+    }
 }

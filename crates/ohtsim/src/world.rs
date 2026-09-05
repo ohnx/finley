@@ -319,6 +319,7 @@ impl World {
         self.lots.push(Lot {
             id: lot_id,
             recipe: self.scenario.recipes[chosen].steps.clone(),
+            recipe_id: chosen,
             step: 0,
             state: LotState::AtPort(src, port),
             created_tick: self.tick_count,
