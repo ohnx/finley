@@ -9,7 +9,7 @@ Fixes from the reference run:
 A spur is a short branch that leaves the loop and rejoins it, so the main line
 stays passable while a vehicle sits on the branch.
 """
-import json
+import json, os, sys
 
 N, E, S, W = 1, 2, 4, 8
 DIRS = ((N, 0, -1), (E, 1, 0), (S, 0, 1), (W, -1, 0))
@@ -195,6 +195,11 @@ out = {
         for m in MACHINES
     ],
 }
-with open("/home/claude/ohtsim/maps/demo_loop.json", "w") as f:
+dest = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                    "..", "maps", "demo_loop.json")
+if os.path.exists(dest) and "--force" not in sys.argv:
+    print(f"{os.path.normpath(dest)} already exists; pass --force to overwrite")
+    raise SystemExit(1)
+with open(dest, "w") as f:
     json.dump(out, f, indent=1)
-print("wrote maps/demo_loop.json")
+print(f"wrote {os.path.normpath(dest)}")

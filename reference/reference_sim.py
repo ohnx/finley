@@ -2,7 +2,9 @@
 Reference implementation of the OHT sim, mirroring the Rust design closely
 enough to validate it end to end. Not the deliverable — a design check.
 """
-import json, heapq, sys
+import json, heapq, os, sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from resolver_proto import resolve
 
 N, E, S, W = 1, 2, 4, 8
@@ -446,7 +448,8 @@ def report(w, label):
 
 
 if __name__ == "__main__":
-    base = "/home/claude/ohtsim/"
+    # Repo root, so this runs from anywhere.
+    base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "")
     mapcfg = json.load(open(base + "maps/demo_loop.json"))
     scen = json.load(open(base + "scenarios/baseline.json"))
     ticks = int(sys.argv[1]) if len(sys.argv) > 1 else 6000

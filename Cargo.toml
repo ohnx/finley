@@ -1,0 +1,9 @@
+# finley is a workspace: ohtsim is the simulation core, ohtsim-wasm the thin
+# shim that exposes it to the browser UI in web/.
+[workspace]
+resolver = "2"
+members = ["crates/ohtsim", "crates/ohtsim-wasm"]
+
+[profile.release]
+opt-level = 3
+lto = true

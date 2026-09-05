@@ -16,6 +16,9 @@ pub struct Metrics {
     pub machine_idle_ticks: Vec<u64>,
     pub machine_names: Vec<String>,
     pub deadlock_events: u64,
+    /// Times a vehicle stayed blocked past `stuck_threshold` and had its route
+    /// thrown away and recomputed. Counts *events*, not distinct vehicles: one
+    /// vehicle in a bad spot can trigger recovery repeatedly.
     pub stuck_vehicle_events: u64,
     pub cycles_rotated: u64,
     /// Sampled every tick: jobs created but not yet assigned.
@@ -91,7 +94,10 @@ impl Metrics {
         s.push_str(&format!("mean backlog         {:.2} jobs\n", self.mean_backlog()));
         s.push_str(&format!("cycles rotated       {}\n", self.cycles_rotated));
         s.push_str(&format!("deadlock events      {}\n", self.deadlock_events));
-        s.push_str(&format!("stuck vehicles       {}\n", self.stuck_vehicle_events));
+        s.push_str(&format!(
+            "stuck recoveries     {}\n",
+            self.stuck_vehicle_events
+        ));
 
         if !self.machine_idle_ticks.is_empty() && self.ticks > 0 {
             s.push_str("\nmachine starvation\n");

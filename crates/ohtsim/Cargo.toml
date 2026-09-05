@@ -1,0 +1,14 @@
+[package]
+name = "ohtsim"
+version = "0.1.0"
+edition = "2021"
+description = "Headless OHT (overhead hoist transport) swarm simulation core"
+
+# Deliberately dependency-free: the same crate compiles to wasm for the UI, and
+# every byte of dependency shows up in the bundle. The JSON parser is hand-rolled
+# in src/json.rs for the same reason.
+[dependencies]
+
+[lib]
+name = "ohtsim"
+path = "src/lib.rs"

@@ -32,6 +32,18 @@ fn main() {
     let scenario = load_scenario(&scen_src, &map.grid).unwrap_or_else(|e| fail("scenario", &e));
     let policy = load_policy(&pol_src).unwrap_or_else(|e| fail("policy", &e));
 
+    // Validate before simulating. A map that strands vehicles produces a run
+    // that looks merely disappointing rather than broken, and diagnosing that
+    // from metrics alone is miserable.
+    let problems = ohtsim::validate(&map);
+    if !problems.is_empty() {
+        eprintln!("map validation failed ({} problems):", problems.len());
+        for p in &problems {
+            eprintln!("  - {}", p);
+        }
+        std::process::exit(1);
+    }
+
     println!("map        {} ({}x{})", map.name, map.grid.w, map.grid.h);
     println!("vehicles   {}", scenario.vehicles);
     println!("seed       {}", scenario.seed);

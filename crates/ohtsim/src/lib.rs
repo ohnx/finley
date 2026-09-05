@@ -17,10 +17,12 @@ pub mod model;
 pub mod movement;
 pub mod policy;
 pub mod routing;
+pub mod validate;
 pub mod world;
 
 pub use config::{load_map, load_policy, load_scenario, MapConfig, RecipeSpec, ScenarioConfig};
 pub use geom::{CellId, Dir, Grid};
 pub use metrics::Metrics;
+pub use validate::{validate, Problem};
 pub use policy::{DispatchWeights, IdleMode, Policy, RouteWeights};
 pub use world::{Snapshot, World};

@@ -177,7 +177,10 @@ def t_two_trains_merge():
     print("two trains merge: winner's train flows, loser's holds  OK")
 
 
-for t in (t_train, t_train_blocked, t_merge, t_rotation,
-          t_broken_cycle, t_two_trains_merge):
-    t()
-print("\nall resolver tests passed")
+# Guarded so reference_sim.py can import `resolve` without the test output
+# landing in the middle of its own.
+if __name__ == "__main__":
+    for t in (t_train, t_train_blocked, t_merge, t_rotation,
+              t_broken_cycle, t_two_trains_merge):
+        t()
+    print("\nall resolver tests passed")

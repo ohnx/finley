@@ -1,0 +1,69 @@
+# Publish the simulator to GitHub Pages.
+#
+# Inert until Pages is enabled for the repo: Settings -> Pages -> Source:
+# "GitHub Actions". Until then this workflow fails at the deploy step and
+# nothing is published.
+#
+# Note that a Pages site is publicly reachable even when the repo is private,
+# unless you are on an Enterprise Cloud plan with access control. Enabling it
+# publishes the simulator to the internet.
+name: Deploy to Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a running deploy finish rather than cancelling it, so the live site is
+# never left half-updated.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add the wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: wasm-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      # The same script used locally, so what ships is what you can check on
+      # your own machine with ./web/dist.sh && (cd _site && python3 -m http.server)
+      - name: Assemble the site
+        run: ./web/dist.sh _site
+
+      # Guards the thing that would otherwise fail silently in a browser: the
+      # sim is deterministic, so wasm must reproduce the native numbers.
+      - name: Check wasm matches the native build
+        run: node web/verify.mjs
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
