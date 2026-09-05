@@ -133,9 +133,9 @@ worth exposing as a tunable.
 
 ## Current state of the code
 
-**The Rust has never been compiled.** No toolchain and no network in the
-session where it was written. Expect syntax and borrow-checker errors on first
-`cargo build`. The design, however, is validated — see below.
+**It compiles and the tests pass.** `cargo test` runs 14 tests green; the
+crate needed exactly one fix to build (`world.rs` never imported
+`model::Machine`). It has no dependencies, as intended.
 
 ```
 src/geom.rs      grid, direction bitmask, directed track graph
@@ -147,10 +147,25 @@ src/policy.rs    the configuration space
 src/world.rs     the tick loop
 src/config.rs    JSON loading
 src/json.rs      minimal JSON parser
+src/validate.rs  map validation, ported from gen_map2.py
 src/bin/headless.rs   runner; compares two policies on an identical job stream
+src/bin/trace.rs      per-tick state dump, for diffing against the Python reference
+tests/integration.rs  whole-tick-loop properties
 maps/ scenarios/ policies/
 reference/       Python prototypes used to validate the design
 ```
+
+Run it:
+
+```
+cargo test
+cargo run --release --bin headless -- maps/demo_loop.json \
+    scenarios/baseline.json policies/default.json 20000 \
+    policies/starvation_biased.json
+```
+
+The headless runner validates the map first and exits non-zero with a problem
+list if it fails.
 
 Routing searches over `(cell, heading)` states rather than plain cells, because
 curve cost depends on arrival direction. Dispatch uses one distance field per
@@ -180,23 +195,77 @@ chambers / 120 ticks, visited twice per lot, caps the fab near 16.7 lots per
 1000 ticks. The scenario released 45, so every policy looked identically
 terrible. Baseline is now 12.
 
-After both fixes, over 20 000 ticks:
+### Three bugs found porting to Rust
+
+Once it compiled, `default` reproduced the Python reference exactly — 77 lots,
+p95 3191, 31.9% utilisation, 6.52 backlog, 45 stuck. `starvation_biased` did
+not: 11 lots against the reference's 79, with arrivals themselves choked off
+because the source had backed up. `src/bin/trace.rs` dumps per-tick state so
+the two implementations can be diffed line by line; that located all three.
+
+- **Vehicle placement strided** through the parking pool as
+  `pool[(i * 7 + 1) % len]` instead of walking it in order. Parking is listed
+  as spur pairs, so map order is meaningful.
+- **The hungriest tool was picked with `max_by`**, which returns the *last*
+  maximum. Early in a run every tool is equally starved, so that tie-break
+  alone decided where the whole fleet went to wait.
+- **Prepositioning collapsed its target set to a single spur.** This was the
+  real one. Straight-line distance to a tool is a crude proxy on a directed
+  track graph and ties are common on a symmetric map, so a coin flip decided
+  where the fleet waited — flipping it moved throughput from 11 lots to 72.
+  Worse, committing to one cell meant every idle vehicle chose the *same*
+  empty spur; the losers arrived to find it taken and re-decided from where
+  they stood, which is the main line. An idle vehicle sat on the loop for 43%
+  of the run, worst at the sink and cmp2 port cells.
+
+The fix: exclude spurs another vehicle is already driving to, keep every spur
+tied for nearest and let the router choose among them by real route cost, and
+fall back to any free spur when the starvation-biased target is unreachable.
+Keeping the line clear outranks the starvation preference.
+
+### Where that leaves the numbers
+
+Over 20 000 ticks, after the fix:
 
 | | default | starvation_biased |
 |---|---|---|
-| completed | 77 | 79 |
-| p95 cycle | 3191 | 5509 |
-| utilisation | 32% | 57% |
-| mean backlog | 6.52 | 4.54 |
+| lots created | 100 | 172 |
+| completed | 77 | 157 |
+| p95 cycle | 3191 | 2571 |
+| utilisation | 32% | 90% |
+| mean backlog | 6.52 | 3.78 |
 | deadlocks | 0 | 0 |
+| stuck | 45 | 0 |
 
-Near-identical throughput, very different tails. That tradeoff is the game.
+**This invalidates the design claim the old table supported.** The previous
+numbers showed near-identical throughput with very different tails, and the
+conclusion drawn was "that tradeoff is the game." That tradeoff was partly an
+artifact of the prepositioning bug. `starvation_biased` now *dominates*
+`default` on every axis — throughput, tail latency, utilisation, backlog — so
+the two shipped policies no longer demonstrate a tradeoff at all. One is simply
+better.
+
+Both are still source-limited: the scenario offers ~240 lots over 20 000 ticks
+and neither creates that many, because backpressure at the source throttles
+arrivals. So `default` is not hitting a physical ceiling, it is just leaving
+the fleet idle 68% of the time.
+
+Making the tradeoff visible again is now the most interesting open question,
+and it is a game-design question rather than a bug: it probably means tuning
+the shipped weight sets so each wins on a different axis, and raising the
+arrival rate until the fleet is the binding constraint rather than the source.
 
 ## Known rough edges
 
-- Stuck-vehicle recovery fires 45–160 times per 20k ticks. Not fatal (the
-  vehicle reroutes and continues) but the underlying stalls deserve
-  investigation rather than a bigger `stuck_threshold`.
+- Stuck-vehicle recovery still fires 45 times per 20k ticks under `default`
+  (it is now 0 under `starvation_biased`). Not fatal — the vehicle reroutes and
+  continues — but the underlying stalls deserve investigation rather than a
+  bigger `stuck_threshold`.
+- An idle vehicle can still end up on the main line when *every* spur is taken:
+  it has nowhere to go and stops where it stands. Down from 43% of ticks to
+  ~10%, and the demo map has exactly as many spurs as vehicles, so there is no
+  slack. More spurs, or letting a vehicle keep circulating rather than stopping,
+  would close it.
 - No resource-deadlock detector.
 - No buffers or stockers. Backpressure currently shows up as lots stuck inside
   machines when output ports are full — works, but coarser than real
@@ -207,12 +276,26 @@ Near-identical throughput, very different tails. That tradeoff is the game.
 
 ## Suggested next steps
 
-1. Get it compiling. `cargo test` first — the resolver tests are the ones that
-   matter.
-2. Port `gen_map2.py`'s validation into Rust **before** building the map editor.
-   It checks strong connectivity, dead ends, dangling exit bits, ports on track,
-   and that the main line stays strongly connected with every spur removed.
-   Without it, every hand-drawn map will strand vehicles in ways that are
-   painful to debug from an isometric view.
-3. Add buffers/stockers and a resource-deadlock detector.
-4. Then the WASM shim and the isometric renderer.
+1. ~~Get it compiling.~~ Done.
+2. ~~Port `gen_map2.py`'s validation into Rust.~~ Done — `src/validate.rs`,
+   wired into the headless runner. Still worth re-reading before building the
+   editor, since the editor should surface `Problem::cell` as a highlight.
+3. **Retune the shipped policies so they show a tradeoff again** (see above).
+   This is the one that decides whether the game premise holds up.
+4. Add buffers/stockers and a resource-deadlock detector.
+5. Then the WASM shim and the isometric renderer.
+
+### A note on validating changes
+
+`reference/reference_sim.py` is the behavioural ground truth and it still runs:
+
+```
+PYTHONPATH=reference python3 reference/reference_sim.py 20000
+```
+
+`src/bin/trace.rs` emits one line of world state per tick in a format close
+enough to diff against it, which is how the three bugs above were found. It is
+worth keeping that comparison working — but note the reference has quirks of
+its own that are *not* design decisions. Its parking tie-break, for instance,
+falls out of CPython's set iteration order. Where Rust and Python disagree,
+decide which is right on the merits rather than making Rust bug-compatible.
