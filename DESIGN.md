@@ -173,8 +173,9 @@ pointer as valid only until the next tick.
 Both targets must agree. The sim is deterministic, so if wasm and native
 diverge, something in the port is target-dependent and the UI is showing a
 different fab from the one the runner reports on — `web/verify.mjs` guards
-that. Checked in a real browser: at tick 1744 the page and the runner both give
-22 lots created, 5 completed, 43.0% utilisation, 3.24 mean backlog.
+that. Checked in a real browser: paused and stepped to exactly tick 2000, the page
+and the runner both give 24 lots created, 8 completed, 45.2% utilisation, 3.34
+mean backlog.
 
 Machine footprints are drawn *under* the track. That is not an overlap bug:
 rails are ceiling-mounted, so they legitimately run over tools, and the sim
@@ -242,13 +243,13 @@ Over 20 000 ticks, after the fix:
 
 | | default | starvation_biased |
 |---|---|---|
-| lots created | 100 | 172 |
-| completed | 77 | 157 |
-| p95 cycle | 3191 | 2571 |
-| utilisation | 32% | 90% |
-| mean backlog | 6.52 | 3.78 |
+| lots created | 110 | 172 |
+| completed | 85 | 159 |
+| p95 cycle | 2877 | 2622 |
+| utilisation | 49% | 90% |
+| mean backlog | 6.64 | 3.83 |
 | deadlocks | 0 | 0 |
-| stuck recoveries | 45 | 0 |
+| stuck recoveries | 0 | 0 |
 
 **This invalidates the design claim the old table supported.** The previous
 numbers showed near-identical throughput with very different tails, and the
@@ -270,16 +271,20 @@ arrival rate until the fleet is the binding constraint rather than the source.
 
 ## Known rough edges
 
-- Stuck-vehicle recovery still fires 45 times per 20k ticks under `default`
-  (it is now 0 under `starvation_biased`). That is 45 *events*, not 45
-  vehicles — there are 8, and one in a bad spot can re-trigger recovery. Not
-  fatal — the vehicle reroutes and continues — but the underlying stalls
-  deserve investigation rather than a bigger `stuck_threshold`.
-- An idle vehicle can still end up on the main line when *every* spur is taken:
-  it has nowhere to go and stops where it stands. Down from 43% of ticks to
-  ~10%, and the demo map has exactly as many spurs as vehicles, so there is no
-  slack. More spurs, or letting a vehicle keep circulating rather than stopping,
-  would close it.
+- ~~Stuck-vehicle recovery fires 45 times per 20k ticks.~~ Now zero under both
+  policies. The stalls this flagged for investigation turned out to be vehicles
+  halting on the main line with no spur free — see below.
+- ~~An idle vehicle can end up stopped on the main line when every spur is
+  taken.~~ Such a vehicle circulates instead: it loiters around the loop one hop
+  at a time and parks the moment a spur frees. Rails are one-way and nothing
+  overtakes, so a halted vehicle is a wall — that accounted for 9,413
+  vehicle-ticks of blocking per 20k under `default`, and 136 afterwards. The
+  remainder is the single tick between finishing a job and deciding where next.
+
+  One consequence to keep in mind: utilisation counts any vehicle that is not
+  parked, so circulating registers as busy. The default policy's figure rose
+  from 32% to 49% without any more transport being done. If that number starts
+  carrying weight, it should count only vehicles on a job.
 - No resource-deadlock detector.
 - No buffers or stockers. Backpressure currently shows up as lots stuck inside
   machines when output ports are full — works, but coarser than real
