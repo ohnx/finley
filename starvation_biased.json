@@ -1,0 +1,36 @@
+{
+  "congestion_decay": 0.98,
+  "stuck_threshold": 200,
+  "kinematics": { "straight_ticks": 1, "curve_ticks": 3, "hoist_ticks": 20 },
+  "idle": { "mode": "preposition", "dwell_before_move": 3 },
+  "profiles": [
+    {
+      "name": "backlog_surge",
+      "trigger": { "type": "backlog_above", "n": 6 },
+      "dispatch": {
+        "travel_to_pickup": 2.0,
+        "lot_wait": 0.4,
+        "lot_priority": 10.0,
+        "dest_starvation": 0.0,
+        "dest_queue": 8.0,
+        "dest_congestion": 1.5,
+        "steps_remaining": 0.0
+      },
+      "route": { "length": 1.0, "curve": 2.0, "congestion": 6.0 }
+    },
+    {
+      "name": "feed_the_hungry",
+      "trigger": { "type": "always" },
+      "dispatch": {
+        "travel_to_pickup": 0.5,
+        "lot_wait": 0.05,
+        "lot_priority": 10.0,
+        "dest_starvation": 40.0,
+        "dest_queue": 2.0,
+        "dest_congestion": 0.5,
+        "steps_remaining": 0.0
+      },
+      "route": { "length": 1.0, "curve": 2.0, "congestion": 3.0 }
+    }
+  ]
+}
