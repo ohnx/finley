@@ -1,32 +1,61 @@
-# ohtsim
+# finley
 
-Headless simulation core for an OHT (overhead hoist transport) fab, built to be
-compiled both natively for batch policy sweeps and to WASM for a browser UI.
+**ohtsim** is finley's simulation core: an OHT (overhead hoist transport) fab —
+the ceiling-mounted robots that move FOUPs between tools in a semiconductor
+fab. It runs headless for batch policy sweeps and compiles to wasm for the
+browser UI in `web/`.
 
 ## Layout
 
 ```
-src/geom.rs      grid, direction bitmask, directed track graph
-src/model.rs     vehicles, machines, lots, jobs, ports
-src/movement.rs  one-vehicle-per-cell movement resolution  (unit tested)
-src/routing.rs   Dijkstra over (cell, heading) with congestion-weighted edges
-src/dispatch.rs  weighted scoring over (job, vehicle, destination) triples
-src/policy.rs    the configuration space
-src/world.rs     the tick loop
-src/config.rs    JSON loading
-src/json.rs      minimal JSON parser (keeps the crate dependency-free)
-src/validate.rs  map validation
-src/bin/headless.rs  runner; compares two policies on one job stream
-src/bin/trace.rs     per-tick state dump, for diffing against the reference
-tests/           whole-tick-loop properties
-maps/            fab layouts
-scenarios/       what work arrives
-policies/        how it is dispatched
-reference/       Python prototypes; the behavioural ground truth
-                 (trace_sim.py is the Python side of src/bin/trace.rs)
+crates/ohtsim/           the simulation core, no dependencies
+  src/geom.rs            grid, direction bitmask, directed track graph
+  src/model.rs           vehicles, machines, lots, jobs, ports
+  src/movement.rs        one-vehicle-per-cell movement resolution  (unit tested)
+  src/routing.rs         Dijkstra over (cell, heading), congestion-weighted
+  src/dispatch.rs        weighted scoring over (job, vehicle, destination)
+  src/policy.rs          the configuration space
+  src/world.rs           the tick loop
+  src/config.rs          JSON loading
+  src/json.rs            minimal JSON parser (keeps the crate dependency-free)
+  src/validate.rs        map validation
+  src/bin/headless.rs    runner; compares two policies on one job stream
+  src/bin/trace.rs       per-tick state dump, for diffing against the reference
+  tests/                 whole-tick-loop properties
+crates/ohtsim-wasm/      browser shim; raw C ABI, no wasm-bindgen
+web/                     the UI: build.sh, serve.sh, verify.mjs, and the page
+maps/                    fab layouts
+scenarios/               what work arrives
+policies/                how it is dispatched
+reference/               Python prototypes; the behavioural ground truth
+                         (trace_sim.py is the Python side of src/bin/trace.rs)
 ```
 
-## Running
+## Running the UI
+
+```
+./web/build.sh     # compiles the wasm; the entire build step
+./web/serve.sh     # serves the repo root, prints the URL
+```
+
+Then open <http://localhost:8000/web/>. It must be served rather than opened as
+a file: the page fetches the map, scenario and policy JSON from the repo root,
+and `WebAssembly.instantiateStreaming` needs a real MIME type.
+
+The page ticks the actual simulation — it is not a replay. Play/pause/step, a
+speed slider up to 200 ticks per frame (about 12,000 ticks/second in Chromium),
+and a policy selector that rebuilds the world so the two shipped policies can be
+compared by eye. Track is drawn as one-way arrows, congestion as a heat wash
+that shows traffic waves propagating backward from a hoisting vehicle, and spur
+cells are tinted so parking reads as distinct from the main line.
+
+Machine footprints sit *under* the track. That is not an overlap bug: rails are
+ceiling-mounted, so they legitimately run over tools, and the sim ignores
+machine `w`/`h` entirely — they are presentational only.
+
+`node web/verify.mjs` checks the wasm build reproduces the native numbers.
+
+## Running headless
 
 ```
 cargo test
@@ -142,12 +171,22 @@ is the open question — see `HANDOFF.md`.
   inside machines when output ports are full, which works but is coarser than
   real under-track buffers.
 
-## Toward the browser build
+## The browser boundary
 
-Keep `src/` free of rendering dependencies. Add `wasm-bindgen` behind a feature
-flag and expose `World::tick` plus `World::snapshot`.
+`crates/ohtsim` stays free of rendering dependencies; `crates/ohtsim-wasm` is
+the only thing that knows a browser exists, and it is a raw C ABI rather than
+wasm-bindgen so the core stays dependency-free.
 
-**Do not serialise the snapshot per frame.** `Snapshot` is deliberately
-struct-of-arrays; expose pointers into those flat `Vec`s and read WASM linear
-memory from JS as typed arrays. Serialising to JSON every tick would eat most of
-the reason for choosing Rust.
+Two rules hold it together, both documented at their call sites:
+
+- **Nothing is serialised per frame.** `Snapshot` is struct-of-arrays and
+  `World::snapshot_into` refills it without reallocating; the shim hands JS
+  pointers into those flat `Vec`s. Serialising every tick would eat most of the
+  reason for choosing Rust.
+- **Static map geometry never crosses the boundary.** JS already fetches the map
+  JSON to build the world, so it reads track bits, machine rectangles and port
+  cells from that. One source of truth.
+
+On the JS side: re-derive every typed-array view from `memory.buffer` each
+frame, because growing wasm memory detaches the old ones, and treat every
+pointer as valid only until the next `oht_tick`.

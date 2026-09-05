@@ -1,4 +1,4 @@
-# ohtsim — session handoff
+# finley / ohtsim — session handoff
 
 Context for a fresh Claude Code session. The project was designed in a chat
 session; this captures the decisions and their reasoning so they don't get
@@ -137,23 +137,28 @@ worth exposing as a tunable.
 crate needed exactly one fix to build (`world.rs` never imported
 `model::Machine`). It has no dependencies, as intended.
 
+finley is a workspace; ohtsim is one component of it.
+
 ```
-src/geom.rs      grid, direction bitmask, directed track graph
-src/model.rs     vehicles, machines, lots, jobs, ports
-src/movement.rs  movement resolution (has unit tests)
-src/routing.rs   Dijkstra over (cell, heading) with congestion-weighted edges
-src/dispatch.rs  weighted scoring over (job, vehicle, destination) triples
-src/policy.rs    the configuration space
-src/world.rs     the tick loop
-src/config.rs    JSON loading
-src/json.rs      minimal JSON parser
-src/validate.rs  map validation, ported from gen_map2.py
-src/bin/headless.rs   runner; compares two policies on an identical job stream
-src/bin/trace.rs      per-tick state dump, for diffing against the reference
-tests/integration.rs  whole-tick-loop properties
-maps/ scenarios/ policies/
-reference/       Python prototypes used to validate the design;
-                 trace_sim.py is the Python side of src/bin/trace.rs
+crates/ohtsim/            the sim core, no dependencies
+  src/geom.rs             grid, direction bitmask, directed track graph
+  src/model.rs            vehicles, machines, lots, jobs, ports
+  src/movement.rs         movement resolution (has unit tests)
+  src/routing.rs          Dijkstra over (cell, heading), congestion-weighted
+  src/dispatch.rs         weighted scoring over (job, vehicle, destination)
+  src/policy.rs           the configuration space
+  src/world.rs            the tick loop
+  src/config.rs           JSON loading
+  src/json.rs             minimal JSON parser
+  src/validate.rs         map validation, ported from gen_map2.py
+  src/bin/headless.rs     runner; compares two policies on one job stream
+  src/bin/trace.rs        per-tick state dump, for diffing against the reference
+  tests/integration.rs    whole-tick-loop properties
+crates/ohtsim-wasm/       browser shim; raw C ABI, no wasm-bindgen
+web/                      the UI (see below)
+maps/ scenarios/ policies/    project content, shared with the UI
+reference/                Python prototypes used to validate the design;
+                          trace_sim.py is the Python side of src/bin/trace.rs
 ```
 
 Run it:
@@ -163,10 +168,43 @@ cargo test
 cargo run --release --bin headless -- maps/demo_loop.json \
     scenarios/baseline.json policies/default.json 20000 \
     policies/starvation_biased.json
+
+./web/build.sh && ./web/serve.sh     # then open http://localhost:8000/web/
 ```
 
 The headless runner validates the map first and exits non-zero with a problem
 list if it fails.
+
+## The web UI
+
+`web/` runs the real simulation in the browser, not a replay: ohtsim compiles
+to wasm and the page ticks it. Play/pause/step, a speed slider to 200 ticks per
+frame (~12,000 ticks/second in Chromium), and a policy selector that rebuilds
+the world so the two shipped policies can be compared by eye.
+
+Top-down, not the isometric this document originally specified. Isometric is
+the eventual game's look; what was needed first was a view that makes emergent
+congestion legible, and a flat heat overlay does that better than a diagonal
+projection. It draws from the same snapshot data, so isometric can layer on
+later without touching the core.
+
+The boundary is deliberately thin. `crates/ohtsim-wasm` is a raw C ABI rather
+than wasm-bindgen, so the core stays dependency-free and there is no JS
+toolchain: `web/build.sh` is the whole build. Nothing is serialised per frame —
+`World::snapshot_into` refills flat `Vec`s in place and the shim hands JS
+pointers into them — and static map geometry never crosses the boundary at all,
+because JS already fetched the map JSON to construct the world.
+
+`node web/verify.mjs` checks the wasm build against the native one. Both
+targets must agree: the sim is deterministic, so if they diverge, something in
+the port is target-dependent and the UI is showing a different fab from the one
+the runner reports on. The UI was checked against the runner in a real browser —
+at tick 1744 both give 22 lots created, 5 completed, 43.0% utilisation, 3.24
+mean backlog.
+
+Note that machine footprints are drawn *under* the track. Rails are
+ceiling-mounted, so running over a tool is correct rather than an overlap bug;
+the sim ignores machine `w`/`h` entirely, they are presentational only.
 
 Routing searches over `(cell, heading)` states rather than plain cells, because
 curve cost depends on arrival direction. Dispatch uses one distance field per
@@ -287,10 +325,16 @@ arrival rate until the fleet is the binding constraint rather than the source.
 2. ~~Port `gen_map2.py`'s validation into Rust.~~ Done — `src/validate.rs`,
    wired into the headless runner. Still worth re-reading before building the
    editor, since the editor should surface `Problem::cell` as a highlight.
-3. **Retune the shipped policies so they show a tradeoff again** (see above).
-   This is the one that decides whether the game premise holds up.
-4. Add buffers/stockers and a resource-deadlock detector.
-5. Then the WASM shim and the isometric renderer.
+3. ~~The WASM shim and a browser UI.~~ Done — `crates/ohtsim-wasm` and `web/`,
+   top-down rather than isometric.
+4. **Retune the shipped policies so they show a tradeoff again** (see above).
+   This is the one that decides whether the game premise holds up, and the UI
+   now makes it possible to watch what each policy actually does.
+5. Add buffers/stockers and a resource-deadlock detector.
+6. Policy editing in the UI. The weights are the game; exposing them as live
+   sliders is the obvious next step, and needs the policy struct crossing the
+   FFI boundary rather than only the config JSON.
+7. The isometric renderer, over the same snapshot data.
 
 ### A note on validating changes
 
