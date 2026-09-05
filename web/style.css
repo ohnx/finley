@@ -166,13 +166,13 @@ canvas#fab { display: block; width: 100%; height: auto; cursor: crosshair; }
 .sw[data-state="3"] { background: var(--veh-drop); }
 .sw[data-state="5"] { background: var(--veh-repos); }
 .sw.port-in, .sw.port-out {
-  border-radius: 0;
+  border-radius: 2px;
   box-shadow: none;
-  clip-path: polygon(100% 50%, 0 0, 0 100%);
-  width: 9px; height: 11px;
+  width: 6px; height: 12px;
 }
 .sw.port-in { background: var(--port-in); }
 .sw.port-out { background: var(--port-out); }
+.sw.foup { background: var(--carry); box-shadow: inset 0 0 0 1px var(--carry-edge); }
 .sw.heat {
   background: linear-gradient(90deg,
     rgba(var(--heat-low), .25), rgba(var(--heat-high), .85));
@@ -234,6 +234,19 @@ aside {
 .line .num { color: var(--dim); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .sub { color: var(--ink-soft); font-size: 11.5px; margin-top: 1px; }
 .sub .kind { color: var(--accent); font-weight: 600; }
+.sub .stalled { color: var(--veh-drop); font-weight: 600; }
+.xref {
+  font: inherit;
+  color: var(--accent);
+  font-weight: 600;
+  background: none;
+  border: 0;
+  border-bottom: 1px dotted currentColor;
+  border-radius: 0;
+  padding: 0;
+  cursor: pointer;
+}
+.xref:hover { background: none; color: var(--ink); }
 
 .pips { display: inline-flex; gap: 2.5px; margin-right: 7px; vertical-align: middle; }
 .pips i {

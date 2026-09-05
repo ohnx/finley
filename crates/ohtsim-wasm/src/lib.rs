@@ -47,6 +47,11 @@ pub const METRIC_COUNT: usize = 13;
 pub const LOT_AT_PORT: u8 = 0;
 pub const LOT_IN_TRANSIT: u8 = 1;
 pub const LOT_PROCESSING: u8 = 2;
+/// Finished processing but still inside the tool, because every out-port is
+/// full. The core models this as `Processing` with nothing left on the clock;
+/// it is a distinct thing to watch, because it is where backpressure starts --
+/// the tool cannot take new work until this lot gets out.
+pub const LOT_BLOCKED: u8 = 3;
 
 /// Per-frame view of the lots still in the fab. Done lots are dropped: the
 /// world keeps every lot it ever made, but only the live ones are worth
@@ -143,7 +148,17 @@ impl Sim {
                 LotState::Done => continue,
                 LotState::AtPort(m, p) => (LOT_AT_PORT, m as u16, p as u16),
                 LotState::InTransit(v) => (LOT_IN_TRANSIT, v as u16, 0),
-                LotState::Processing(m) => (LOT_PROCESSING, m as u16, 0),
+                LotState::Processing(m) => {
+                    // Zero ticks left on the clock means the recipe step is
+                    // finished and the lot is only still here because it has
+                    // nowhere to go.
+                    let done = self.world.machines[m]
+                        .in_process
+                        .iter()
+                        .find(|(id, _)| *id == lot.id)
+                        .is_some_and(|(_, remaining)| *remaining == 0);
+                    (if done { LOT_BLOCKED } else { LOT_PROCESSING }, m as u16, 0)
+                }
             };
             l.id.push(lot.id as u32);
             l.recipe.push(lot.recipe_id as u8);
@@ -154,6 +169,11 @@ impl Sim {
             l.b.push(b);
             // A lot in process or in transit is not waiting; the clock only
             // means something for one parked on a port.
+            // Only meaningful for a lot parked on a port. `waiting_since` is
+            // not reset when a lot enters a tool, so for one blocked inside it
+            // would read as time since it arrived at the *input* port, whole
+            // processing run included -- a number that looks like a wait and
+            // is not one.
             l.wait.push(if place == LOT_AT_PORT {
                 lot.wait_ticks(now).min(u32::MAX as u64) as u32
             } else {

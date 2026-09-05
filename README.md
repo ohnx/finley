@@ -49,20 +49,27 @@ compared by eye.
 
 On the map: track is drawn as one-way arrows, congestion as a heat wash that
 shows traffic waves propagating backward from a hoisting vehicle, and spur cells
-are tinted so parking reads as distinct from the main line. Ports are
-arrowheads pointing the way a lot travels — into the tool for an in-port, out of
-it for an out-port — and filled when a lot is sitting there, which is where
-backpressure shows up first.
+are tinted so parking reads as distinct from the main line.
+
+Each tool is drawn as its body plus a neck out to each of its load ports, so a
+port reads as part of the machine it serves — the map places ports wherever the
+track runs, which is not always against the tool. A port itself is a bay,
+coloured green for in and rust for out, with the lot drawn sitting on it when
+one is there. Watching out-bays fill is watching backpressure arrive.
 
 Four tabs alongside:
 
 - **Lots** — every lot in the fab with its recipe progress, what tool kind it
-  needs next, and where it is (in a tool, riding an OHT, or waiting at a named
-  port). Click one to follow it: it stays ringed on the map as it moves, on
-  whichever tab you are on.
+  needs next, and where it is. Click one to follow it: it stays ringed on the
+  map as it moves, on whichever tab you are on. A lot inside a tool is either
+  *processing* or *done, no free out-port* — the second is a finished lot that
+  cannot leave, which stalls the tool behind it, so it is called out rather than
+  lumped in with work in progress.
 - **OHTs** — all eight vehicles, what each is doing, what it carries and where
   it is headed. Click one to draw its planned route, which is how a congestion
-  detour becomes visible. Hovering a vehicle on the map shows the same.
+  detour becomes visible. Hovering a vehicle on the map shows the same. A lot
+  names the vehicle carrying it and a vehicle names its lot, and both are links,
+  so following one to the other does not mean hunting through the other tab.
 - **Tools** — utilisation (share of ticks with a lot in process) and queue
   depth per machine. Source and sink show "—": nothing is ever *in process* at
   either, so a percentage there would read 100% and mean nothing.
@@ -82,7 +89,9 @@ Machine footprints sit *under* the track. That is not an overlap bug: rails are
 ceiling-mounted, so they legitimately run over tools, and the sim ignores
 machine `w`/`h` entirely — they are presentational only.
 
-`node web/verify.mjs` checks the wasm build reproduces the native numbers.
+`node web/verify.mjs` checks the wasm build reproduces the native numbers, and
+that no class in `app.js` defines a method twice — a duplicate silently shadows
+the earlier definition, and the only symptom is a blank canvas.
 
 ### Publishing it
 

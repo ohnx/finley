@@ -66,8 +66,29 @@ for (const [name, want] of Object.entries(EXPECTED)) {
   }
 }
 
+// A duplicated class method in app.js is silently legal -- the later
+// definition simply wins -- so a bad edit can shadow a working renderer method
+// with a stale copy, or delete one entirely, and the only symptom is a blank
+// canvas at runtime. Both happened while building the lot and OHT panels.
+const KEYWORDS = new Set(["if", "for", "while", "switch", "catch", "return",
+                          "function", "do", "else"]);
+const app = fs.readFileSync(path.join(ROOT, "web/app.js"), "utf8");
+// Check within each class, so the two constructors do not look like a clash.
+for (const cls of app.split(/^class\s+(\w+)/m).slice(1).reduce(
+       (acc, part, i, all) => (i % 2 ? acc : [...acc, [part, all[i + 1]]]), [])) {
+  const [name, body] = cls;
+  const defs = [...body.matchAll(/^ {2}([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/gm)]
+    .map((m) => m[1])
+    .filter((n) => !KEYWORDS.has(n));
+  const dupes = [...new Set(defs.filter((n, i) => defs.indexOf(n) !== i))];
+  if (dupes.length) {
+    console.error(`FAIL class ${name} defines these more than once: ${dupes.join(", ")}`);
+    failures++;
+  }
+}
+
 if (failures) {
-  console.error(`\n${failures} policy/policies diverged from the native build`);
+  console.error(`\n${failures} check(s) failed`);
   process.exit(1);
 }
 console.log("\nwasm matches the native build");

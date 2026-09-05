@@ -41,7 +41,7 @@ const VEH_LABEL = ["parked", "fetching", "hoisting up",
                    "delivering", "hoisting down", "repositioning"];
 
 // Lot placement, matching LOT_* in crates/ohtsim-wasm/src/lib.rs.
-const AT_PORT = 0, IN_TRANSIT = 1, PROCESSING = 2;
+const AT_PORT = 0, IN_TRANSIT = 1, PROCESSING = 2, BLOCKED = 3;
 
 // Must match METRIC_COUNT and the block built in crates/ohtsim-wasm/src/lib.rs.
 const M = {
@@ -312,22 +312,56 @@ class Renderer {
     }
   }
 
+  /// A tool is drawn as its body plus a neck out to each of its load ports, so
+  /// a port reads as part of the machine it belongs to.
+  ///
+  /// The map places ports wherever the track runs, which is not always against
+  /// the tool: metro1's are two cells clear of its body. A bounding box round
+  /// body and ports would close that gap, but ports sit on opposite faces, so
+  /// the box also swallows cells the tool has nothing to do with and collides
+  /// with its neighbours. A neck to the nearest point of the body connects the
+  /// two and claims nothing else, and it handles a port set diagonally without
+  /// any special case.
   drawMachines() {
     const { ctx, cell, p } = this;
     ctx.font = "500 11px ui-sans-serif, system-ui, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
+    const inset = 2;
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
     for (const m of this.map.machines) {
-      const x = m.x * cell, y = m.y * cell;
-      const w = m.w * cell, h = m.h * cell;
-      ctx.fillStyle = p[`--m-${m.kind}`] || p["--m-other"];
-      this.roundRect(x + 2, y + 2, w - 4, h - 4, 3);
+      const colour = p[`--m-${m.kind}`] || p["--m-other"];
+      const L = m.x * cell, T = m.y * cell;
+      const R = L + m.w * cell, B = T + m.h * cell;
+
+      ctx.fillStyle = colour;
+      ctx.strokeStyle = colour;
+      ctx.lineCap = "round";
+      ctx.lineWidth = cell * 0.5;
+
+      for (const port of m.ports) {
+        const [px, py] = port.cell;
+        const cx = px * cell + cell / 2;
+        const cy = py * cell + cell / 2;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(clamp(cx, L, R), clamp(cy, T, B));
+        ctx.stroke();
+        this.roundRect(px * cell + inset, py * cell + inset,
+                       cell - inset * 2, cell - inset * 2, 3);
+        ctx.fill();
+      }
+
+      this.roundRect(L + inset, T + inset,
+                     m.w * cell - inset * 2, m.h * cell - inset * 2, 3);
       ctx.fill();
       ctx.strokeStyle = p["--machine-edge"];
       ctx.lineWidth = 1;
       ctx.stroke();
+
       ctx.fillStyle = p["--machine-label"];
-      ctx.fillText(m.name, x + w / 2, y + h / 2);
+      ctx.fillText(m.name, (m.x + m.w / 2) * cell, (m.y + m.h / 2) * cell);
     }
   }
 
@@ -401,10 +435,16 @@ class Renderer {
     return this._spurs;
   }
 
-  /// Ports as arrowheads pointing the way a lot travels: an in-port aims at
-  /// the tool, an out-port away from it. A filled head means a lot is sitting
-  /// there right now, which is where backpressure shows up first -- a machine
-  /// whose out-ports are all full has stopped being able to finish work.
+  /// Ports as load bays: a coloured pad on the tool's edge, with the FOUP
+  /// drawn sitting on it when one is there.
+  ///
+  /// This replaces a pair of arrowheads. Direction is what an arrow is good at,
+  /// but a port's direction never changes and the track already has arrows
+  /// everywhere, so they added a second thing to decode and left occupancy --
+  /// which does change, and is where backpressure shows -- as a subtle
+  /// filled-versus-hollow difference. A bay reads as a place, and a box on it
+  /// reads as a lot, which is what is actually being asked of the picture.
+  /// Green bays take lots in, rust bays hand them out.
   drawPorts(portLots) {
     const { ctx, cell, p } = this;
     let i = 0;
@@ -416,31 +456,32 @@ class Renderer {
         const [px, py] = port.cell;
         const cx = px * cell + cell / 2;
         const cy = py * cell + cell / 2;
-        // Unit vector from the port toward the tool it serves.
-        let dx = mcx - cx, dy = mcy - cy;
-        const len = Math.hypot(dx, dy) || 1;
-        dx /= len; dy /= len;
-        // Out-ports point away: the lot is leaving the tool.
-        const sign = port.kind === "in" ? 1 : -1;
-        dx *= sign; dy *= sign;
 
-        const colour = p[port.kind === "in" ? "--port-in" : "--port-out"];
-        const r = 6.5;
-        const tipx = cx + dx * r, tipy = cy + dy * r;
-        ctx.beginPath();
-        ctx.moveTo(tipx, tipy);
-        ctx.lineTo(cx - dx * r * 0.5 + dy * r * 0.72, cy - dy * r * 0.5 - dx * r * 0.72);
-        ctx.lineTo(cx - dx * r * 0.5 - dy * r * 0.72, cy - dy * r * 0.5 + dx * r * 0.72);
-        ctx.closePath();
+        // Lay the bay along the tool's edge: broad across the approach, thin
+        // in the direction of the tool.
+        const horizontal = Math.abs(mcx - cx) > Math.abs(mcy - cy);
+        const long = cell * 0.62, short = cell * 0.3;
+        const bw = horizontal ? short : long;
+        const bh = horizontal ? long : short;
+        // Nudge it against the tool rather than centring it in the cell.
+        const off = cell * 0.16;
+        const bx = cx + (horizontal ? Math.sign(mcx - cx) * off : 0);
+        const by = cy + (horizontal ? 0 : Math.sign(mcy - cy) * off);
+
+        // Full strength either way: the bay sits on the tool's own fill now,
+        // and a translucent one of similar warmth disappeared into it. The bay
+        // says which direction; the box on it says whether a lot is there.
+        ctx.fillStyle = p[port.kind === "in" ? "--port-in" : "--port-out"];
+        this.roundRect(bx - bw / 2, by - bh / 2, bw, bh, 2);
+        ctx.fill();
+
         if (occupied) {
-          ctx.fillStyle = colour;
-          ctx.fill();
-        } else {
-          ctx.fillStyle = p["--deck"];
-          ctx.fill();
-          ctx.strokeStyle = colour;
-          ctx.lineWidth = 1.4;
-          ctx.stroke();
+          const s = cell * 0.26;
+          ctx.fillStyle = p["--carry"];
+          ctx.fillRect(cx - s / 2, cy - s / 2, s, s);
+          ctx.strokeStyle = p["--carry-edge"];
+          ctx.lineWidth = 1;
+          ctx.strokeRect(cx - s / 2, cy - s / 2, s, s);
         }
       }
     }
@@ -517,15 +558,22 @@ const esc = (t) => String(t).replace(/[&<>]/g, (c) =>
 function lotPlace(map, lots, i, veh) {
   const place = lots.place[i], a = lots.a[i], b = lots.b[i];
   if (place === PROCESSING) {
-    return { text: `in ${map.machines[a].name}`, cell: null };
+    return { text: `processing in ${map.machines[a].name}`, cell: null };
+  }
+  if (place === BLOCKED) {
+    // Finished, but the tool cannot hand it out because every out-port is
+    // full. The tool is now stalled behind it.
+    return { text: `done in ${map.machines[a].name}, no free out-port`,
+             cell: null, warn: true };
   }
   if (place === IN_TRANSIT) {
     const cell = a < veh.n ? veh.y[a] * map.width + veh.x[a] : null;
-    return { text: `riding OHT ${a}`, cell };
+    return { text: `riding OHT ${a}`, cell, oht: a };
   }
   const port = map.machines[a].ports[b];
   return {
-    text: `waiting at ${map.machines[a].name} ${port.kind}`,
+    text: `${port.kind === "out" ? "awaiting pickup at" : "queued at"} ` +
+          `${map.machines[a].name} ${port.kind}`,
     cell: port.cell[1] * map.width + port.cell[0],
   };
 }
@@ -567,13 +615,16 @@ function renderLots(map, recipes, lots, veh, sel) {
     const wait = lots.place[i] === AT_PORT && lots.wait[i] > 0
       ? `${fmt(lots.wait[i])}t` : "";
     const hot = lots.priority[i] > 0 ? ' <span class="kind">hot</span>' : "";
+    const place = where.oht !== undefined
+      ? `riding <button class="xref" data-goto-oht="${where.oht}">OHT ${where.oht}</button>`
+      : `<span class="${where.warn ? "stalled" : ""}">${esc(where.text)}</span>`;
     return `<li data-lot="${lots.id[i]}" aria-selected="${sel.lot === lots.id[i]}">
       <div class="line">
         <span class="who">#${lots.id[i]}${hot}</span>
         <span class="num">${wait}</span>
       </div>
       <div class="sub">${pips(step, total)}${step}/${total} ·
-        next <span class="kind">${esc(kind)}</span> · ${esc(where.text)}</div>
+        next <span class="kind">${esc(kind)}</span> · ${place}</div>
     </li>`;
   }).join("");
 
@@ -604,7 +655,9 @@ function renderOhts(map, veh, targets, sim, sel) {
     const target = tm >= 0
       ? `${map.machines[tm].name} ${map.machines[tm].ports[targets.port[i]].kind}`
       : "—";
-    const cargo = lot >= 0 ? `lot #${lot}` : "empty";
+    const cargo = lot >= 0
+      ? `carrying <button class="xref" data-goto-lot="${lot}">lot #${lot}</button>`
+      : "empty";
     rows.push(`<li data-oht="${i}" aria-selected="${sel.oht === i}">
       <div class="line">
         <span class="who"><i class="sw" data-state="${st}"></i> OHT ${i}</span>
@@ -848,17 +901,19 @@ async function main() {
   $("speed").dispatchEvent(new Event("input"));
 
   // -- tabs ----------------------------------------------------------------
-  $("tabs").addEventListener("click", (ev) => {
-    const btn = ev.target.closest("button[data-tab]");
-    if (!btn) return;
-    tab = btn.dataset.tab;
+  function showTab(name) {
+    tab = name;
     for (const b of $("tabs").children) {
-      b.setAttribute("aria-selected", String(b === btn));
+      b.setAttribute("aria-selected", String(b.dataset.tab === name));
     }
-    for (const name of ["lots", "ohts", "machines", "stats"]) {
-      $(`panel-${name}`).hidden = name !== tab;
+    for (const t of ["lots", "ohts", "machines", "stats"]) {
+      $(`panel-${t}`).hidden = t !== name;
     }
     paint();
+  }
+  $("tabs").addEventListener("click", (ev) => {
+    const btn = ev.target.closest("button[data-tab]");
+    if (btn) showTab(btn.dataset.tab);
   });
 
   // -- selection -----------------------------------------------------------
@@ -866,11 +921,25 @@ async function main() {
     sel[key] = sel[key] === value ? -1 : value;
     paint();
   };
+  // A lot names the vehicle carrying it and a vehicle names its lot; both are
+  // links, so following one to the other does not mean hunting for it in the
+  // other tab.
+  const jump = (key, id, name) => {
+    sel[key] = id;
+    showTab(name);
+    const row = $(name).querySelector(`[data-${key === "lot" ? "lot" : "oht"}="${id}"]`);
+    row?.scrollIntoView({ block: "nearest" });
+  };
+
   $("lots").addEventListener("click", (ev) => {
+    const xref = ev.target.closest("button[data-goto-oht]");
+    if (xref) { jump("oht", +xref.dataset.gotoOht, "ohts"); return; }
     const li = ev.target.closest("li[data-lot]");
     if (li) toggle("lot", +li.dataset.lot);
   });
   $("ohts").addEventListener("click", (ev) => {
+    const xref = ev.target.closest("button[data-goto-lot]");
+    if (xref) { jump("lot", +xref.dataset.gotoLot, "lots"); return; }
     const li = ev.target.closest("li[data-oht]");
     if (li) toggle("oht", +li.dataset.oht);
   });
