@@ -10,7 +10,7 @@ use crate::dispatch;
 use crate::geom::{manoeuvre, CellId, Dir, Grid, Manoeuvre};
 use crate::metrics::Metrics;
 use crate::model::{
-    Job, JobId, Lot, LotId, LotState, MachineId, PortKind, VehState, Vehicle, VehicleId,
+    Job, JobId, Lot, LotId, LotState, Machine, MachineId, PortKind, VehState, Vehicle, VehicleId,
 };
 use crate::policy::{IdleMode, Policy, Trigger};
 use crate::routing::Router;
@@ -84,23 +84,25 @@ impl World {
         let machines: Vec<Machine> = map.machines;
         let mut occupancy = vec![None; n_cells];
 
-        // Place vehicles: use declared start cells, else spread over parking,
-        // else over any track cell. Deterministic either way.
+        // Place vehicles: declared start cells first, then parking in map
+        // order, then any track cell. Walked in order rather than strided --
+        // parking cells are listed as spur pairs, so taking them in order
+        // spreads vehicles over the map the way the map author intended, and
+        // it is what reference/reference_sim.py does.
         let mut starts: Vec<CellId> = scenario.vehicle_start_cells.clone();
         if starts.len() < scenario.vehicles {
-            let mut pool: Vec<CellId> = map.parking.clone();
-            if pool.is_empty() {
-                pool = (0..n_cells).filter(|&c| grid.has_track(c)).collect();
-            }
-            let mut i = 0usize;
-            while starts.len() < scenario.vehicles && !pool.is_empty() {
-                let c = pool[(i * 7 + 1) % pool.len()];
+            let pool: Vec<CellId> = map
+                .parking
+                .iter()
+                .copied()
+                .chain((0..n_cells).filter(|&c| grid.has_track(c)))
+                .collect();
+            for c in pool {
+                if starts.len() >= scenario.vehicles {
+                    break;
+                }
                 if !starts.contains(&c) {
                     starts.push(c);
-                }
-                i += 1;
-                if i > pool.len() * 8 {
-                    break;
                 }
             }
         }
@@ -536,11 +538,24 @@ impl World {
         // Only ever aim at parking that is actually free. Targeting an
         // occupied spur leaves the vehicle waiting on the main line, which is
         // the blockage parking was supposed to avoid.
+        //
+        // "Free" has to include spurs another vehicle is already driving to,
+        // not just spurs that are occupied right now. Two vehicles that pick
+        // the same empty spur both commit to it; the loser arrives, finds it
+        // taken, and re-decides from wherever it is standing -- which is on
+        // the main line.
+        let claimed: Vec<CellId> = self
+            .vehicles
+            .iter()
+            .filter(|o| o.id != v && o.state == VehState::Repositioning)
+            .filter_map(|o| o.route.last().copied())
+            .collect();
         let free_parking: Vec<CellId> = self
             .parking
             .iter()
             .copied()
             .filter(|&c| self.occupancy[c].is_none() || self.occupancy[c] == Some(v))
+            .filter(|c| !claimed.contains(c))
             .collect();
         if free_parking.is_empty() {
             self.vehicles[v].state = VehState::Idle;
@@ -551,17 +566,20 @@ impl World {
             IdleMode::NearestPark => free_parking.clone(),
             IdleMode::Preposition => {
                 // Park nearest the hungriest tool.
-                let hungriest = self
-                    .machines
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, m)| !m.is_source() && !m.is_sink())
-                    .max_by(|a, b| {
-                        a.1.starvation
-                            .partial_cmp(&b.1.starvation)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    })
-                    .map(|(i, _)| i);
+                // First-wins on ties, not last. Early in a run every tool is
+                // equally starved, so the tie-break decides where the whole
+                // fleet prepositions -- `max_by` would silently pick the last
+                // machine in map order instead of the first.
+                let mut hungriest: Option<MachineId> = None;
+                for (i, m) in self.machines.iter().enumerate() {
+                    if m.is_source() || m.is_sink() {
+                        continue;
+                    }
+                    match hungriest {
+                        Some(b) if !(m.starvation > self.machines[b].starvation) => {}
+                        _ => hungriest = Some(i),
+                    }
+                }
                 match hungriest {
                     Some(mi) => {
                         let target_cell = self.machines[mi]
@@ -570,15 +588,27 @@ impl World {
                             .map(|p| p.cell)
                             .unwrap_or(self.vehicles[v].cell);
                         let (tx, ty) = self.grid.xy(target_cell);
-                        let mut best = free_parking.clone();
-                        best.sort_by_key(|&c| {
+                        let d2 = |c: CellId| -> i64 {
                             let (x, y) = self.grid.xy(c);
                             let dx = x as i64 - tx as i64;
                             let dy = y as i64 - ty as i64;
                             dx * dx + dy * dy
-                        });
-                        best.truncate(1);
-                        best
+                        };
+                        // Keep every spur tied for nearest, not an arbitrary
+                        // one of them. Straight-line distance to a tool is a
+                        // crude proxy on a directed track graph and ties are
+                        // common on a symmetric map; collapsing to one cell
+                        // makes a coin-flip decide where the fleet waits, and
+                        // strands the vehicle entirely if that one cell turns
+                        // out to be unreachable. The router picks among the
+                        // tied cells by real route cost, which is the quantity
+                        // the vehicle actually pays.
+                        let best = free_parking.iter().map(|&c| d2(c)).min().unwrap_or(0);
+                        free_parking
+                            .iter()
+                            .copied()
+                            .filter(|&c| d2(c) == best)
+                            .collect()
                     }
                     None => free_parking.clone(),
                 }
@@ -592,17 +622,35 @@ impl World {
             return;
         }
 
-        let prof = &self.policy.profiles[self.active_profile];
-        if let Some(r) = self.router.route(
-            &self.grid,
-            &self.congestion,
-            &prof.route,
-            self.vehicles[v].cell,
-            self.vehicles[v].heading,
-            &targets,
-        ) {
+        // Falling back to any free spur matters more than honouring the
+        // starvation bias: an idle vehicle left standing on the main line
+        // blocks the loop for everything behind it, and no-overtaking means
+        // that congestion propagates backward until the fab gridlocks.
+        // Prepositioning is a preference, keeping the line clear is not.
+        let prof = self.policy.profiles[self.active_profile].route.clone();
+        let (cell, heading) = (self.vehicles[v].cell, self.vehicles[v].heading);
+        let route = self
+            .router
+            .route(&self.grid, &self.congestion, &prof, cell, heading, &targets)
+            .or_else(|| {
+                if targets.len() == free_parking.len() {
+                    None
+                } else {
+                    self.router.route(
+                        &self.grid,
+                        &self.congestion,
+                        &prof,
+                        cell,
+                        heading,
+                        &free_parking,
+                    )
+                }
+            });
+        if let Some(r) = route {
             self.vehicles[v].route = r.path;
             self.vehicles[v].state = VehState::Repositioning;
+        } else {
+            self.vehicles[v].state = VehState::Idle;
         }
     }
 
