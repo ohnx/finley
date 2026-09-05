@@ -55,6 +55,24 @@ machine `w`/`h` entirely — they are presentational only.
 
 `node web/verify.mjs` checks the wasm build reproduces the native numbers.
 
+### Publishing it
+
+`.github/workflows/pages.yml` builds the wasm and deploys to GitHub Pages on
+every push to `main`, or on demand from the Actions tab. It is inert until Pages
+is switched on: **Settings → Pages → Source: "GitHub Actions"**.
+
+Two things to know before switching it on. A Pages site is publicly reachable
+even when the repo is private, unless you are on Enterprise Cloud with access
+control — so this publishes the simulator to the internet. And Pages on a
+private repo needs a paid plan; on Free it is public repos only.
+
+`./web/dist.sh` assembles exactly what the workflow publishes, so you can check
+it locally first:
+
+```
+./web/dist.sh && (cd _site && python3 -m http.server)
+```
+
 `DESIGN.md` explains why any of this is shaped the way it is.
 
 ## Running headless

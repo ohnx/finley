@@ -1,3 +1,4 @@
 /target
 __pycache__/
 web/ohtsim.wasm
+/_site
