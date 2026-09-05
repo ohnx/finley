@@ -69,7 +69,7 @@ job→vehicle assignment, route cost, idle-vehicle repositioning. Plus
 (`backlog_above`, `queue_depth_above`, `starvation_above`) — which is how fabs
 get policy structure without a scripting language.
 
-**Four config documents, not one:** map (grid + track + machine placement),
+**Three config documents, not one:** map (grid + track + machine placement),
 scenario (vehicles, arrival rate, recipes, seed), policy (weights). Splitting
 them is what lets you run one map against many scenarios and one scenario
 against many policies.
@@ -149,10 +149,11 @@ src/config.rs    JSON loading
 src/json.rs      minimal JSON parser
 src/validate.rs  map validation, ported from gen_map2.py
 src/bin/headless.rs   runner; compares two policies on an identical job stream
-src/bin/trace.rs      per-tick state dump, for diffing against the Python reference
+src/bin/trace.rs      per-tick state dump, for diffing against the reference
 tests/integration.rs  whole-tick-loop properties
 maps/ scenarios/ policies/
-reference/       Python prototypes used to validate the design
+reference/       Python prototypes used to validate the design;
+                 trace_sim.py is the Python side of src/bin/trace.rs
 ```
 
 Run it:
@@ -172,7 +173,7 @@ curve cost depends on arrival direction. Dispatch uses one distance field per
 idle vehicle rather than one Dijkstra per candidate pair, or scoring would cost
 thousands of searches per tick.
 
-### How it was validated without a compiler
+### How it was validated before there was a compiler
 
 `reference/resolver_proto.py` prototypes the resolver with tests for the train,
 merge, rotation, and false-deadlock cases; those tests were then ported into
@@ -184,11 +185,15 @@ generates and validates the demo map.
 
 **Parking was on the main loop.** One idle vehicle parks, the loop is severed,
 the fab gridlocks — zero lots completed in 6000 ticks. Fixed with parking
-**spurs** (short branches that leave the loop and rejoin it). Two rules fall out,
-both now implemented: routing must never path *through* a spur
-(`Router::set_avoid`), and a vehicle must only target parking that is currently
-free — otherwise it queues for an occupied spur while sitting on the main line,
-which is the blockage spurs exist to prevent.
+**spurs** (short branches that leave the loop and rejoin it). Two rules fall
+out: routing must never path *through* a spur (`Router::set_avoid`), and a
+vehicle must only target parking that is currently free — otherwise it queues
+for an occupied spur while sitting on the main line, which is the blockage spurs
+exist to prevent.
+
+The second rule was only half-implemented: it checked which spurs were occupied
+*now* but not which ones another vehicle was already driving to, so two vehicles
+still committed to the same empty spur. See the porting bugs below.
 
 **Arrival rate wasn't set against the bottleneck.** litho at 2 tools × 2
 chambers / 120 ticks, visited twice per lot, caps the fab near 16.7 lots per
@@ -198,7 +203,8 @@ terrible. Baseline is now 12.
 ### Three bugs found porting to Rust
 
 Once it compiled, `default` reproduced the Python reference exactly — 77 lots,
-p95 3191, 31.9% utilisation, 6.52 backlog, 45 stuck. `starvation_biased` did
+p95 3191, 31.9% utilisation, 6.52 backlog, 45 stuck recoveries.
+`starvation_biased` did
 not: 11 lots against the reference's 79, with arrivals themselves choked off
 because the source had backed up. `src/bin/trace.rs` dumps per-tick state so
 the two implementations can be diffed line by line; that located all three.
@@ -235,7 +241,7 @@ Over 20 000 ticks, after the fix:
 | utilisation | 32% | 90% |
 | mean backlog | 6.52 | 3.78 |
 | deadlocks | 0 | 0 |
-| stuck | 45 | 0 |
+| stuck recoveries | 45 | 0 |
 
 **This invalidates the design claim the old table supported.** The previous
 numbers showed near-identical throughput with very different tails, and the
@@ -258,9 +264,10 @@ arrival rate until the fleet is the binding constraint rather than the source.
 ## Known rough edges
 
 - Stuck-vehicle recovery still fires 45 times per 20k ticks under `default`
-  (it is now 0 under `starvation_biased`). Not fatal — the vehicle reroutes and
-  continues — but the underlying stalls deserve investigation rather than a
-  bigger `stuck_threshold`.
+  (it is now 0 under `starvation_biased`). That is 45 *events*, not 45
+  vehicles — there are 8, and one in a bad spot can re-trigger recovery. Not
+  fatal — the vehicle reroutes and continues — but the underlying stalls
+  deserve investigation rather than a bigger `stuck_threshold`.
 - An idle vehicle can still end up on the main line when *every* spur is taken:
   it has nowhere to go and stops where it stands. Down from 43% of ticks to
   ~10%, and the demo map has exactly as many spurs as vehicles, so there is no
@@ -290,7 +297,7 @@ arrival rate until the fleet is the binding constraint rather than the source.
 `reference/reference_sim.py` is the behavioural ground truth and it still runs:
 
 ```
-PYTHONPATH=reference python3 reference/reference_sim.py 20000
+python3 reference/reference_sim.py 20000
 ```
 
 `src/bin/trace.rs` emits one line of world state per tick in a format close

@@ -128,9 +128,11 @@ impl World {
             });
         }
 
-        let mut metrics = Metrics::default();
-        metrics.machine_idle_ticks = vec![0; machines.len()];
-        metrics.machine_names = machines.iter().map(|m| m.name.clone()).collect();
+        let metrics = Metrics {
+            machine_idle_ticks: vec![0; machines.len()],
+            machine_names: machines.iter().map(|m| m.name.clone()).collect(),
+            ..Default::default()
+        };
 
         let n_veh = vehicles.len();
         World {
@@ -575,9 +577,13 @@ impl World {
                     if m.is_source() || m.is_sink() {
                         continue;
                     }
-                    match hungriest {
-                        Some(b) if !(m.starvation > self.machines[b].starvation) => {}
-                        _ => hungriest = Some(i),
+                    let better = match hungriest {
+                        // Strictly greater, so the *first* maximum wins.
+                        Some(b) => m.starvation > self.machines[b].starvation,
+                        None => true,
+                    };
+                    if better {
+                        hungriest = Some(i);
                     }
                 }
                 match hungriest {

@@ -6,11 +6,16 @@
 //! are miserable to diagnose from an isometric view, where all you see is that
 //! the fab stopped.
 //!
-//! The load-bearing property is the last one. A parking spur exists so an idle
-//! vehicle can leave the loop; if the author draws parking *on* the loop, one
-//! parked vehicle severs it and the fab gridlocks with zero lots completed.
-//! Checking that the main line stays strongly connected with every spur cell
-//! removed is what catches that at edit time.
+//! The load-bearing check is that the main line stays strongly connected with
+//! every spur cell removed. A parking spur exists so an idle vehicle can leave
+//! the loop; if the author draws parking *on* the loop, one parked vehicle
+//! severs it and the fab gridlocks with zero lots completed. That check is what
+//! catches it at edit time.
+//!
+//! Two checks are stronger here than in the Python. Spur entry and rejoin are
+//! decided by search rather than by looking only at a spur cell's immediate
+//! neighbours, so a multi-cell spur that leads nowhere is caught; and a port
+//! drawn on a spur is reported against the port cell rather than only globally.
 
 use crate::config::MapConfig;
 use crate::geom::{CellId, Grid, ALL_DIRS};
