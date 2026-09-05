@@ -72,14 +72,13 @@ fn no_two_vehicles_claim_the_same_spur() {
 /// A vehicle idling on the main line blocks everything behind it, and with no
 /// overtaking that congestion propagates backward until the fab gridlocks.
 ///
-/// It cannot be driven to zero: when every spur is genuinely taken a vehicle
-/// has nowhere to go and stops where it stands. The threshold guards the
-/// regression that mattered -- prepositioning collapsing its whole target set
-/// to one arbitrary cell, which stranded vehicles on the loop for 43% of the
-/// run.
+/// It cannot be driven to zero: a vehicle that finishes a job is Idle for the
+/// one tick before it re-decides where to go. But it should never *stay* there
+/// -- a vehicle with no free spur circulates instead of stopping, so the count
+/// is now bounded by that handoff rather than by how many spurs are free.
 #[test]
 fn idle_vehicles_do_not_camp_on_the_main_line() {
-    for (policy, limit) in [("default", 900), ("starvation_biased", 700)] {
+    for (policy, limit) in [("default", 250), ("starvation_biased", 250)] {
         let mut w = world(policy);
         let mut blocked_ticks = 0;
         for _ in 0..3_000 {
@@ -117,6 +116,45 @@ fn shipped_policies_do_not_gridlock() {
             w.metrics.lots_completed >= 30,
             "{policy}: only {} lots completed in 10k ticks -- the fab is jammed",
             w.metrics.lots_completed
+        );
+    }
+}
+
+
+/// The invariant behind circulation: a vehicle standing still on the main line
+/// is a wall, because rails are one-way and nothing can overtake it.
+///
+/// Blocking is legitimate and expected -- a 20-tick hoist blocks everything
+/// behind it, and that is the congestion the game is about. What must not
+/// happen is a vehicle blocking others because it *parked on the loop*: it has
+/// no job, it is not hoisting, it is simply stopped somewhere it should never
+/// have stopped. Before vehicles circulated, that accounted for over nine
+/// thousand vehicle-ticks of blocking per twenty thousand ticks.
+#[test]
+fn vehicles_do_not_stop_on_the_main_line_and_block_others() {
+    for policy in ["default", "starvation_biased"] {
+        let mut w = world(policy);
+        let parking = w.parking.clone();
+        let mut blocked = 0u64;
+        let mut worst = 0u32;
+        for _ in 0..20_000 {
+            w.tick();
+            for v in &w.vehicles {
+                let Some(next) = v.next_cell() else { continue };
+                let Some(other) = w.occupancy[next] else { continue };
+                let blocker = &w.vehicles[other];
+                if blocker.state != VehState::Idle || parking.contains(&blocker.cell) {
+                    continue;
+                }
+                blocked += 1;
+                worst = worst.max(v.blocked_ticks);
+            }
+        }
+        assert!(
+            blocked < 1_500,
+            "{policy}: {blocked} vehicle-ticks spent blocked behind a vehicle stopped \
+             on the main line (worst streak {worst}) -- unparkable vehicles should be \
+             circulating, not halting on the loop"
         );
     }
 }

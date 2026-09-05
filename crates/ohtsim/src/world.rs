@@ -530,7 +530,12 @@ impl World {
             return;
         }
         self.idle_ticks_of[v] = self.idle_ticks_of[v].saturating_add(1);
-        if self.idle_ticks_of[v] < self.policy.idle.dwell_before_move {
+        // Dwell exists to stop a parked vehicle twitching between spurs on
+        // every small change in starvation. It has no business delaying a
+        // vehicle that is standing on the main line, where waiting is not
+        // patience, it is a roadblock.
+        let on_spur = self.parking.contains(&self.vehicles[v].cell);
+        if on_spur && self.idle_ticks_of[v] < self.policy.idle.dwell_before_move {
             return;
         }
         if self.parking.is_empty() || self.policy.idle.mode == IdleMode::StayPut {
@@ -561,7 +566,7 @@ impl World {
             .filter(|c| !claimed.contains(c))
             .collect();
         if free_parking.is_empty() {
-            self.vehicles[v].state = VehState::Idle;
+            self.circulate(v);
             return;
         }
 
@@ -657,7 +662,45 @@ impl World {
             self.vehicles[v].route = r.path;
             self.vehicles[v].state = VehState::Repositioning;
         } else {
-            self.vehicles[v].state = VehState::Idle;
+            self.circulate(v);
+        }
+    }
+
+    /// Keep a vehicle that cannot park moving, rather than stopping it where it
+    /// stands.
+    ///
+    /// Rails are one-way and vehicles cannot overtake, so a vehicle halted on
+    /// the main line is a wall: everything behind it queues until something
+    /// else breaks the jam. Real OHT fleets keep circulating for exactly this
+    /// reason -- a vehicle with nowhere to go loiters around the loop instead
+    /// of parking on it. Spurs exist so that stopping is always off the line,
+    /// so if no spur is available the answer is to keep moving, not to stop.
+    ///
+    /// One hop at a time: the vehicle re-decides on arrival, so it parks the
+    /// moment a spur frees up rather than committing to a lap.
+    fn circulate(&mut self, v: VehicleId) {
+        let cell = self.vehicles[v].cell;
+        let heading = self.vehicles[v].heading;
+        let exits = self.grid.exits(cell);
+
+        // Straight on where possible: a curve costs three ticks and there is no
+        // destination here worth paying for. Spurs are skipped -- an empty one
+        // is either claimed by another vehicle or would have been parked in
+        // already, and driving in would strand this one behind a dead end.
+        let onward = exits
+            .iter()
+            .find(|(d, n)| *d == heading && !self.parking.contains(n))
+            .or_else(|| exits.iter().find(|(_, n)| !self.parking.contains(n)))
+            .map(|(_, n)| *n);
+
+        match onward {
+            Some(next) => {
+                self.vehicles[v].route = vec![next];
+                self.vehicles[v].state = VehState::Repositioning;
+            }
+            // Nowhere legal to go at all. Validation rejects maps with dead
+            // ends, so this only happens if every exit is a spur.
+            None => self.vehicles[v].state = VehState::Idle,
         }
     }
 
