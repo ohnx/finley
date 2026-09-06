@@ -18,6 +18,7 @@ pub mod movement;
 pub mod policy;
 pub mod routing;
 pub mod validate;
+pub mod vehicles;
 pub mod world;
 
 pub use config::{load_map, load_policy, load_scenario, MapConfig, RecipeSpec, ScenarioConfig};

@@ -244,12 +244,12 @@ Over 20 000 ticks, after the fix:
 
 | | default | starvation_biased |
 |---|---|---|
-| lots created | 163 | 173 |
-| arrivals deferred | 36 | 22 |
-| completed | 149 | 158 |
-| p95 cycle | 2594 | 2121 |
-| utilisation | 49% | 92% |
-| mean backlog | 4.57 | 3.10 |
+| lots created | 177 | 170 |
+| arrivals deferred | 23 | 30 |
+| completed | 164 | 156 |
+| p95 cycle | 2210 | 2249 |
+| utilisation | 97% | 98% |
+| mean backlog | 2.89 | 3.35 |
 | deadlocks | 0 | 0 |
 | resource deadlocks | 0 | 0 |
 | stuck recoveries | 0 | 0 |
@@ -370,6 +370,27 @@ ports would not have fixed it either — the cycle would form on load ports
 instead of output ports. The in/out split is kept for now because it is legible:
 a lot visibly moves from an in-bay to an out-bay, and backpressure is obvious on
 the map.
+
+## Fleet size and the spur bug
+
+Half the fleet was dead for most of this project's life. Vehicles that parked on
+the inner cell of a two-cell spur could not route out of it — routing refuses to
+path *through* a spur, and taken literally that forbids leaving one too — so
+they were unreachable in every distance field, never scored by dispatch, and
+never moved. The `default` policy's 49% utilisation was four working vehicles
+out of eight.
+
+With all of them live the map turned out to be over-fleeted. Throughput peaks
+around five to seven vehicles and collapses at eight: 65% of vehicle time
+blocked, an 83-cell loop saturated by 20-tick hoists with no overtaking. Between
+six and seven it is also chaotic, swinging between 165 and 1780 lots depending
+on the WIP cap. The scenario ships **five**, which is stable and beats the old
+eight-with-four-dead.
+
+Two lessons worth keeping. A fab with half a fleet still completes lots, so
+nothing failed loudly — there is now a test asserting every vehicle carries a
+job. And fleet size and WIP cap interact: they are two knobs on the same curve,
+and neither can be tuned alone.
 
 ## Open questions
 

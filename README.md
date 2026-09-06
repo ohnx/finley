@@ -18,6 +18,7 @@ crates/ohtsim/           the simulation core, no dependencies
   src/world.rs           the tick loop
   src/config.rs          JSON loading
   src/json.rs            minimal JSON parser (keeps the crate dependency-free)
+  src/vehicles.rs        the vehicle half of the tick: jobs, parking, movement
   src/validate.rs        map validation
   src/bin/headless.rs    runner; compares two policies on one job stream
   src/bin/trace.rs       per-tick state dump, for diffing against the reference
@@ -259,3 +260,11 @@ Two rules hold it together, both documented at their call sites:
 On the JS side: re-derive every typed-array view from `memory.buffer` each
 frame, because growing wasm memory detaches the old ones, and treat every
 pointer as valid only until the next `oht_tick`.
+
+Two entry points exist for work that is not built yet but is coming:
+
+- `oht_set_policy` swaps the policy on a running world without disturbing the
+  fab, which is what a weights UI needs — the point of tuning is watching the
+  *same* fab respond to a changed weight, and rebuilding would hide that.
+- `oht_validate_map` checks a map document without building a world from it, so
+  an editor can report problems while someone is still drawing.

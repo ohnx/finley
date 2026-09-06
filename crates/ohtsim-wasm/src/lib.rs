@@ -333,6 +333,57 @@ pub unsafe extern "C" fn oht_new(
     }
 }
 
+/// Swap the policy on a running world, keeping the fab exactly as it is.
+///
+/// This is what a weights UI needs: the point of tuning is watching the same
+/// fab respond to a changed weight, which rebuilding from scratch would hide.
+/// Returns 1 on success, 0 on a bad policy document (see `oht_error_ptr`).
+///
+/// # Safety
+/// `sim` must be live and `ptr` must point to `len` initialised bytes.
+#[no_mangle]
+pub unsafe extern "C" fn oht_set_policy(sim: *mut Sim, ptr: *const u8, len: usize) -> u32 {
+    let Some(sim) = sim.as_mut() else { return 0 };
+    let parsed = as_str(ptr, len).and_then(load_policy);
+    match parsed {
+        Ok(policy) => {
+            sim.world.policy = policy;
+            sim.refresh();
+            1
+        }
+        Err(e) => {
+            set_error(e);
+            0
+        }
+    }
+}
+
+/// Validate a map document without building a world from it.
+///
+/// A map editor needs to say what is wrong while someone is still drawing,
+/// which means checking a map that is not yet runnable. Returns the number of
+/// problems; the text of them is in `oht_error_ptr`/`oht_error_len`, one per
+/// line, so zero means the map is safe to simulate.
+///
+/// # Safety
+/// `ptr` must point to `len` initialised bytes.
+#[no_mangle]
+pub unsafe extern "C" fn oht_validate_map(ptr: *const u8, len: usize) -> usize {
+    let checked = as_str(ptr, len).and_then(load_map);
+    match checked {
+        Ok(map) => {
+            let problems = ohtsim::validate(&map);
+            let text: Vec<String> = problems.iter().map(|p| p.to_string()).collect();
+            set_error(text.join("\n"));
+            problems.len()
+        }
+        Err(e) => {
+            set_error(e);
+            1
+        }
+    }
+}
+
 /// # Safety
 /// `sim` must come from `oht_new` and must not be used afterwards.
 #[no_mangle]
