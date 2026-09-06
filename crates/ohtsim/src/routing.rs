@@ -51,6 +51,9 @@ impl Ord for Node {
     }
 }
 
+/// Sentinel for a cell that is not on any spur.
+const NO_SPUR: u32 = u32::MAX;
+
 pub struct Router {
     n_states: usize,
     dist: Vec<f32>,
@@ -60,6 +63,11 @@ pub struct Router {
     /// through. Parking spurs: routing a loaded vehicle through a spur would
     /// let a parked vehicle block it, which is the failure spurs exist to stop.
     avoid: Vec<bool>,
+    /// Which spur each cell belongs to, or `NO_SPUR`. Spurs are the connected
+    /// runs of avoided cells.
+    spur: Vec<u32>,
+    /// Track neighbours of each cell, either direction, for grouping spurs.
+    neighbours: Vec<Vec<CellId>>,
 }
 
 fn state_of(cell: CellId, d: Dir) -> usize {
@@ -89,12 +97,71 @@ impl Router {
             prev: vec![usize::MAX; n],
             heap: BinaryHeap::new(),
             avoid: vec![false; grid.len()],
+            spur: vec![NO_SPUR; grid.len()],
+            neighbours: {
+                let mut adj = vec![Vec::new(); grid.len()];
+                for c in 0..grid.len() {
+                    for (_, n) in grid.exits(c) {
+                        adj[c].push(n);
+                        adj[n].push(c);
+                    }
+                }
+                adj
+            },
         }
     }
 
     /// Mark cells as destination-only. Length must equal the cell count.
+    /// Cells no route may pass *through* -- the parking spurs. A spur exists so
+    /// an idle vehicle can leave the main line; routing a loaded vehicle
+    /// through one would put it behind whatever is parked there.
+    ///
+    /// "Through" is doing real work in that sentence. A vehicle sitting on a
+    /// spur must still be able to drive *out* of one, and a vehicle heading for
+    /// a spur must be able to drive *in*. Spurs on this map are two cells deep,
+    /// so both of those cross a second avoided cell; forbidding that outright
+    /// left the four vehicles parked on the inner cells unable to route
+    /// anywhere at all, and therefore never assigned a job for the whole run.
     pub fn set_avoid(&mut self, mask: Vec<bool>) {
+        // Label each connected run of avoided cells, so "this spur" and "some
+        // other spur" are distinguishable. Two cells are in the same spur when
+        // track runs between them in either direction.
+        self.spur = vec![NO_SPUR; mask.len()];
+        let mut next_id = 0u32;
+        for start in 0..mask.len() {
+            if !mask[start] || self.spur[start] != NO_SPUR {
+                continue;
+            }
+            let id = next_id;
+            next_id += 1;
+            let mut stack = vec![start];
+            self.spur[start] = id;
+            while let Some(c) = stack.pop() {
+                for n in self.neighbours[c].iter().copied() {
+                    if mask.get(n).copied().unwrap_or(false) && self.spur[n] == NO_SPUR {
+                        self.spur[n] = id;
+                        stack.push(n);
+                    }
+                }
+            }
+        }
         self.avoid = mask;
+    }
+
+    /// Whether a step from `cell` into `next` is allowed given the avoid mask.
+    ///
+    /// Entering an avoided cell is allowed only within a single spur: either
+    /// the step stays inside the spur we are already on (driving out), or it
+    /// enters the spur we are trying to reach (driving in). Crossing some
+    /// *other* spur stays forbidden, which is the whole point -- that is where
+    /// a parked vehicle would be sitting in the way.
+    fn passable(&self, cell: CellId, next: CellId, target_spur: u32) -> bool {
+        let spur = self.spur_of(next);
+        spur == NO_SPUR || spur == self.spur_of(cell) || spur == target_spur
+    }
+
+    fn spur_of(&self, cell: CellId) -> u32 {
+        self.spur.get(cell).copied().unwrap_or(NO_SPUR)
     }
 
     /// Cheapest route from `start` (arriving with `heading`) to any cell in
@@ -111,6 +178,15 @@ impl Router {
         if targets.is_empty() {
             return None;
         }
+
+        // Computed once, not per edge. Targets are either all on one spur (a
+        // parking move) or none of them are, so the first spur found is the one
+        // the route is allowed to enter.
+        let target_spur = targets
+            .iter()
+            .map(|&t| self.spur_of(t))
+            .find(|&s| s != NO_SPUR)
+            .unwrap_or(NO_SPUR);
         if targets.contains(&start) {
             return Some(RouteResult {
                 path: Vec::new(),
@@ -148,7 +224,7 @@ impl Router {
                     Some(n) => n,
                     None => continue,
                 };
-                if self.avoid.get(next).copied().unwrap_or(false) && !targets.contains(&next) {
+                if !self.passable(cell, next, target_spur) {
                     continue;
                 }
                 let step_cost = match manoeuvre(from_dir, d) {
@@ -239,7 +315,10 @@ impl Router {
                     Some(n) => n,
                     None => continue,
                 };
-                if self.avoid.get(next).copied().unwrap_or(false) {
+                // No targets here: a distance field is to everywhere. Steps
+                // out of a spur are allowed so a parked vehicle has finite
+                // costs; steps into one are not, since nothing routes through.
+                if !self.passable(cell, next, NO_SPUR) {
                     continue;
                 }
                 let step_cost = match manoeuvre(from_dir, d) {

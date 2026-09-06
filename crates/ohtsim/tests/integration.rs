@@ -217,40 +217,62 @@ fn a_wip_cap_prevents_the_resource_deadlock() {
     );
 }
 
-/// What buffers are actually for, stated precisely.
+
+/// Every vehicle must be able to reach the fab from wherever it parks.
 ///
-/// They are *not* what prevents the deadlock -- at the shipped cap the fab
-/// completes the same number of lots with them and without. What they buy is
-/// tolerance: they widen the range of WIP settings that stay safe, so a cap set
-/// too high degrades instead of killing the fab. At a cap of 24 that is the
-/// difference between running and stopping.
+/// Spurs on the demo map are two cells deep, and routing refuses to path
+/// *through* a spur so a loaded vehicle never ends up behind a parked one. Taken
+/// literally that also forbids driving *out* of one, and the four vehicles that
+/// happened to start on inner spur cells could not route anywhere at all: they
+/// sat still for the entire run and were never assigned a single job. Half the
+/// fleet was dead and every metric was quietly measuring the other half.
+///
+/// Nothing caught it because a fab with half a fleet still completes lots. So
+/// this asserts the thing that was actually false: every vehicle does some work.
 #[test]
-fn buffers_widen_the_safe_wip_range() {
-    let build = |cap: usize, buffers: bool| {
-        let (mut map, mut scen, pol) = fixtures("default");
-        if !buffers {
-            map.machines.retain(|m| !m.is_buffer());
+fn every_vehicle_gets_used() {
+    for policy in ["default", "starvation_biased"] {
+        let mut w = world(policy);
+        let n = w.vehicles.len();
+        let mut worked = vec![false; n];
+        for _ in 0..20_000 {
+            w.tick();
+            for (i, v) in w.vehicles.iter().enumerate() {
+                if matches!(v.state, VehState::ToPickup(_) | VehState::ToDropoff(_)) {
+                    worked[i] = true;
+                }
+            }
         }
-        scen.wip_cap = cap;
-        let mut w = World::new(map, scen, pol);
-        w.run(30_000);
-        w
-    };
+        let idle: Vec<usize> = (0..n).filter(|&i| !worked[i]).collect();
+        assert!(
+            idle.is_empty(),
+            "{policy}: vehicles {idle:?} never carried a job in 20k ticks -- \
+             they are probably unable to route off their parking spur"
+        );
+    }
+}
 
-    // At a cap set too high, buffers are the difference between running and not.
-    let loose_with = build(24, true);
-    let loose_without = build(24, false);
-    assert_eq!(loose_with.metrics.resource_deadlock_events, 0);
+/// The busiest and least busy vehicle should be doing comparable amounts.
+///
+/// A weaker version of the above that also catches a dispatcher that merely
+/// *prefers* the same few vehicles, rather than one that strands the rest.
+#[test]
+fn work_is_spread_across_the_fleet() {
+    let mut w = world("default");
+    let n = w.vehicles.len();
+    let mut busy = vec![0u64; n];
+    for _ in 0..40_000 {
+        w.tick();
+        for (i, v) in w.vehicles.iter().enumerate() {
+            if !v.is_idle() {
+                busy[i] += 1;
+            }
+        }
+    }
+    let hi = *busy.iter().max().unwrap();
+    let lo = *busy.iter().min().unwrap();
     assert!(
-        loose_without.metrics.resource_deadlock_events > 0,
-        "without buffers a cap of 24 should still deadlock; if it no longer \
-         does, the safe range moved and this test is measuring nothing"
+        lo * 3 >= hi,
+        "fleet load is lopsided: busiest vehicle {hi} ticks, least busy {lo} ({busy:?})"
     );
-
-    // At the shipped cap they are not load-bearing, and saying so keeps anyone
-    // from mistaking them for the fix.
-    let tight_with = build(16, true);
-    let tight_without = build(16, false);
-    assert_eq!(tight_with.metrics.resource_deadlock_events, 0);
-    assert_eq!(tight_without.metrics.resource_deadlock_events, 0);
 }

@@ -66,7 +66,7 @@ const PALETTE_KEYS = [
   "--select", "--select-halo",
   "--heat-low", "--heat-high",
   "--m-source", "--m-sink", "--m-litho", "--m-etch", "--m-cmp", "--m-metro",
-  "--m-buffer", "--m-other",
+  "--m-other",
 ];
 
 function readPalette() {
@@ -452,9 +452,7 @@ class Renderer {
         // Full strength either way: the bay sits on the tool's own fill now,
         // and a translucent one of similar warmth disappeared into it. The bay
         // says which direction; the box on it says whether a lot is there.
-        ctx.fillStyle = m.kind === "buffer"
-          ? p["--machine-label"]
-          : p[port.kind === "in" ? "--port-in" : "--port-out"];
+        ctx.fillStyle = p[port.kind === "in" ? "--port-in" : "--port-out"];
         this.roundRect(bx - bw / 2, by - bh / 2, bw, bh, 2);
         ctx.fill();
 
@@ -555,11 +553,11 @@ function lotPlace(map, lots, i, veh) {
   }
   const machine = map.machines[a];
   const port = machine.ports[b];
-  const where = machine.kind === "buffer"
-    ? `parked in ${machine.name}`
-    : `${port.kind === "out" ? "awaiting pickup at" : "queued at"} ` +
-      `${machine.name} ${port.kind}`;
-  return { text: where, cell: port.cell[1] * map.width + port.cell[0] };
+  return {
+    text: `${port.kind === "out" ? "awaiting pickup at" : "queued at"} ` +
+          `${machine.name} ${port.kind}`,
+    cell: port.cell[1] * map.width + port.cell[0],
+  };
 }
 
 function pips(step, total) {
@@ -656,23 +654,11 @@ function renderOhts(map, veh, targets, sim, sel) {
 
 function renderMachines(map, mach, idle, tick) {
   $("machines").innerHTML = map.machines.map((m, i) => {
-    // Nothing is ever "in process" at a source, sink or buffer, so the idle
-    // counter never advances for them and a utilisation figure would read a
+    // Nothing is ever "in process" at a source or a sink, so the idle counter
+    // never advances for them and a utilisation figure would read a
     // meaningless 100%.
-    const virtual = m.kind === "source" || m.kind === "sink" || m.kind === "buffer";
+    const virtual = m.kind === "source" || m.kind === "sink";
     const util = virtual || !tick ? null : 1 - idle[i] / tick;
-    if (m.kind === "buffer") {
-      // A buffer has occupancy, not utilisation: how full it is, and full is
-      // the state that matters, because a full buffer cannot unblock anything.
-      const full = mach.load[i] / m.ports.length;
-      return `<li class="static">
-        <div class="line">
-          <span class="who">${esc(m.name)} <span class="tag">buffer</span></span>
-          <span class="num">${mach.load[i]} / ${m.ports.length} slots</span>
-        </div>
-        <div class="bar"><i style="width:${full * 100}%"></i></div>
-      </li>`;
-    }
     return `<li class="static">
       <div class="line">
         <span class="who">${esc(m.name)}</span>

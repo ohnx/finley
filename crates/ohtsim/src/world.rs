@@ -203,9 +203,7 @@ impl World {
     fn run_machines(&mut self) {
         let now = self.tick_count;
         for m_id in 0..self.machines.len() {
-            // Neither a source nor a buffer processes anything, so neither can
-            // be starved of work and neither pulls lots off its own ports.
-            if self.machines[m_id].is_source() || self.machines[m_id].is_buffer() {
+            if self.machines[m_id].is_source() {
                 continue;
             }
 
@@ -366,11 +364,7 @@ impl World {
                 LotState::AtPort(m, p) => (m, p),
                 _ => continue,
             };
-            // A lot leaves a tool from an output port. A buffer has no
-            // direction: anything sitting in one is waiting to move on.
-            if !self.machines[m].is_buffer()
-                && self.machines[m].ports[p].kind != PortKind::Output
-            {
+            if self.machines[m].ports[p].kind != PortKind::Output {
                 continue;
             }
             if self.lots[lot_id].next_kind().is_none() {
@@ -409,9 +403,10 @@ impl World {
                 let lot = &self.lots[self.jobs[jid].lot];
                 match lot.next_kind() {
                     None => true,
-                    Some(kind) => !self.machines.iter().any(|m| {
-                        (m.kind == kind || m.is_buffer()) && m.free_inbound_port().is_some()
-                    }),
+                    Some(kind) => !self
+                        .machines
+                        .iter()
+                        .any(|m| m.kind == kind && m.free_port(PortKind::Input).is_some()),
                 }
             });
 

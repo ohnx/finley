@@ -91,21 +91,6 @@ MACHINES = [
     dict(name="sink",   kind="sink",   x=1,  y=3, w=2, h=2, process_ticks=1,   capacity=4,
          ports=[("in", (0, 3))]),
 
-    # Overhead hoist buffers: somewhere a finished lot can go that is not
-    # another tool's port. Without them the reentrant flow closes a
-    # litho -> etch -> cmp -> litho cycle, every tool holding a finished lot
-    # that the next tool has no room for, and the fab stops dead.
-    #
-    # Their ports work in both directions -- a slot is somewhere a vehicle both
-    # drops off and collects -- and their kind is never named by a recipe, so
-    # dispatch only sends a lot here when no tool can take it. Spread around the
-    # loop rather than pooled, so a blocked tool has one near it.
-    dict(name="ohb_n",  kind="buffer", x=7,  y=1, w=1, h=2, process_ticks=0,   capacity=0,
-         ports=[("in", (8, 1)), ("in", (8, 2))]),
-    dict(name="ohb_e",  kind="buffer", x=14, y=9, w=1, h=2, process_ticks=0,   capacity=0,
-         ports=[("in", (15, 9)), ("in", (15, 10))]),
-    dict(name="ohb_s",  kind="buffer", x=9,  y=10, w=2, h=1, process_ticks=0,  capacity=0,
-         ports=[("in", (9, 11)), ("in", (10, 11))]),
 ]
 
 
