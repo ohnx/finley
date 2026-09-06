@@ -103,11 +103,35 @@ pub fn plan(
         let lot_term = -dw.lot_wait * wait - dw.lot_priority * lot.priority
             + dw.steps_remaining * steps_left;
 
+        // Buffering is for unblocking a tool, not for parking work.
+        //
+        // Three conditions, and all of them earn their place. No tool of the
+        // required kind can take the lot, or storage would be used while a tool
+        // stood free. The lot is not already in a buffer, or two buffers would
+        // pass it back and forth while it made no progress. And the tool it is
+        // sitting on is actually blocked -- it has finished a lot that cannot
+        // reach an output port -- because moving this one frees that port.
+        //
+        // Without the last condition a buffered lot costs two transport moves
+        // where one would do, and on a fleet already near saturation that is
+        // pure loss: it cost starvation_biased 30 lots and doubled its p95.
+        let source = &machines[job.from.0];
+        let tool_free = machines
+            .iter()
+            .any(|m| m.kind == kind && m.free_port(PortKind::Input).is_some());
+        let source_blocked = source.in_process.iter().any(|(_, remaining)| *remaining == 0);
+        let from_buffer = source.is_buffer();
+
         for (m_id, m) in machines.iter().enumerate() {
-            if m.kind != kind {
+            let usable = if m.kind == kind {
+                true
+            } else {
+                m.is_buffer() && !tool_free && !from_buffer && source_blocked
+            };
+            if !usable {
                 continue;
             }
-            let port = match m.free_port(PortKind::Input) {
+            let port = match m.free_inbound_port() {
                 Some(p) => p,
                 None => continue,
             };

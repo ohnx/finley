@@ -57,6 +57,11 @@ which meet because every body is placed against its own ports in the map —
 coloured green for in and rust for out, with the lot drawn sitting on it when
 one is there. Watching out-bays fill is watching backpressure arrive.
 
+The grey stations (`ohb_n`, `ohb_e`, `ohb_s`) are overhead hoist buffers. Their
+slots are neutral because a buffer has no direction — it is somewhere a finished
+lot can wait that is not another tool's port. Without them the reentrant recipes
+deadlock the fab; see `DESIGN.md`.
+
 Four tabs alongside:
 
 - **Lots** — every lot in the fab with its recipe progress, what tool kind it
@@ -71,8 +76,10 @@ Four tabs alongside:
   names the vehicle carrying it and a vehicle names its lot, and both are links,
   so following one to the other does not mean hunting through the other tab.
 - **Tools** — utilisation (share of ticks with a lot in process) and queue
-  depth per machine. Source and sink show "—": nothing is ever *in process* at
-  either, so a percentage there would read 100% and mean nothing.
+  depth per machine. Source, sink and buffers show "—": nothing is ever *in
+  process* at any of them, so a percentage would read 100% and mean nothing.
+  Buffers show slots used instead, because a full buffer is one that can no
+  longer unblock anything.
 - **Stats** — the cycle-time distribution as a histogram with p50 and p95
   marked, because two policies can agree on the mean and disagree completely on
   the tail, plus the throughput counters.

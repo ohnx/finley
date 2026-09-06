@@ -16,8 +16,8 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 // From: cargo run --release --bin headless -- maps/demo_loop.json \
 //           scenarios/baseline.json policies/<name>.json 20000
 const EXPECTED = {
-  default:           { created: 110, completed: 85,  p95: 2877, stuck: 0 },
-  starvation_biased: { created: 172, completed: 159, p95: 2622, stuck: 0 },
+  default:           { created: 168, completed: 144, p95: 3741, stuck: 0 },
+  starvation_biased: { created: 177, completed: 165, p95: 2448, stuck: 0 },
 };
 
 const M = { TICK: 0, CREATED: 1, COMPLETED: 2, THROUGHPUT: 3, MEAN_CYCLE: 4,

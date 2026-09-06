@@ -125,8 +125,9 @@ a unit instead:
   deadlock either — it clears when the hoist finishes.
 - Movement deadlock proper appears as a cycle whose members aren't all
   proposing.
-- **Resource deadlock** (vehicles waiting on ports that will never free) is a
-  separate problem and currently **has no detector**. This is the main gap.
+- **Resource deadlock** (lots waiting on ports that will never free) is a
+  separate problem with its own detector, and it turned out to be real rather
+  than theoretical — see "The deadlock that actually happened" below.
 
 Current merge priority rule: loaded vehicles and long-blocked vehicles win
 contested cells. Swapping this for pure FIFO changes fab behaviour a lot and is
@@ -243,12 +244,13 @@ Over 20 000 ticks, after the fix:
 
 | | default | starvation_biased |
 |---|---|---|
-| lots created | 110 | 172 |
-| completed | 85 | 159 |
-| p95 cycle | 2877 | 2622 |
-| utilisation | 49% | 90% |
-| mean backlog | 6.64 | 3.83 |
+| lots created | 168 | 177 |
+| completed | 144 | 165 |
+| p95 cycle | 3741 | 2448 |
+| utilisation | 49% | 94% |
+| mean backlog | 7.68 | 4.07 |
 | deadlocks | 0 | 0 |
+| resource deadlocks | 0 | 0 |
 | stuck recoveries | 0 | 0 |
 
 **This invalidates the design claim the old table supported.** The previous
@@ -285,25 +287,79 @@ arrival rate until the fleet is the binding constraint rather than the source.
   parked, so circulating registers as busy. The default policy's figure rose
   from 32% to 49% without any more transport being done. If that number starts
   carrying weight, it should count only vehicles on a job.
-- No resource-deadlock detector.
-- No buffers or stockers. Backpressure currently shows up as lots stuck inside
-  machines when output ports are full — works, but coarser than real
-  under-track buffers, and buffers are also a good thing for the player to
-  allocate.
+- ~~No resource-deadlock detector.~~ There is one now, and it found a real
+  deadlock — see below.
+- ~~No buffers or stockers.~~ Three overhead hoist buffers on the demo map,
+  six slots. Still a good thing for the player to allocate: count and placement
+  are untuned.
 - Dispatch's delivery-cost term seeds its distance field with an arbitrary legal
   heading, so it can be off by one curve. Immaterial for ranking.
+
+## The deadlock that actually happened
+
+Reentrant recipes and one output port per tool are enough to deadlock the fab,
+and it is not a rare corner. Under the default policy the cycle closed at around
+tick 11,900 every run:
+
+```
+litho1/litho2  hold finished lots needing etch,  out-ports full
+etch1/etch2    hold finished lots needing cmp,   out-ports full
+cmp1/cmp2      hold finished lots needing litho, out-ports full
+```
+
+Nothing in transit, vehicles idle, jobs pending that can never be assigned
+because no destination input port can ever free. The metrics looked merely
+disappointing rather than broken, which is why it went unnoticed for so long.
+
+**Buffers are the fix, and they are what real fabs use.** Overhead hoist buffers
+and under-track storage exist precisely so a finished lot has somewhere to go
+that is not another tool's port. The demo map now has three, six slots total,
+spread around the loop rather than pooled.
+
+Two rules make them pay for themselves rather than cost throughput:
+
+- **Buffering must unblock something.** A lot is only sent to a buffer when no
+  tool of the kind it needs can take it *and* the tool it is sitting on has a
+  finished lot that cannot reach an output port. Without that second condition
+  every buffered lot costs two transport moves where one would do; on a fleet
+  already near saturation that is pure loss, and it cost `starvation_biased`
+  30 lots and doubled its p95 before the condition was added.
+- **A buffered lot is never re-buffered.** Otherwise two buffers pass it back
+  and forth while it makes no progress through its recipe.
+
+With both: zero resource deadlocks over 50 000 ticks under either policy, and
+throughput up from 85 to 144 lots for `default` and 159 to 165 for
+`starvation_biased`.
+
+### A note on load ports
+
+Real 300mm tools do **not** have separate input and output ports. They have two
+to four SEMI E15.1 load ports, and those are bidirectional: a FOUP docks at one,
+the EFEM robot moves wafers into the tool and returns them to the same FOUP on
+the same port, and the carrier sits there for the whole visit.
+
+Worth knowing, and worth not confusing with the deadlock. Switching to
+bidirectional load ports would *not* have fixed it — the cycle would just form
+on load ports instead of output ports. What breaks a circular wait is somewhere
+to put a lot that is not a tool port at all. The in/out split is kept for now
+because it is legible: a lot visibly moves from an in-bay to an out-bay, and
+backpressure is obvious on the map.
 
 ## Open questions
 
 1. **Retune the shipped policies so they show a tradeoff again** (see above).
    This is the one that decides whether the game premise holds up, and the UI
    now makes it possible to watch what each policy actually does.
-2. Buffers and stockers, and a resource-deadlock detector.
-3. Policy editing in the UI. The weights *are* the game; exposing them as live
+2. ~~Buffers and stockers, and a resource-deadlock detector.~~ Done. Buffer
+   count and placement are untuned, though, and are exactly the sort of thing
+   the player should be deciding.
+3. Bidirectional load ports, to match real tools (see above). A model change,
+   not a fix — the deadlock is already handled.
+4. Policy editing in the UI. The weights *are* the game; exposing them as live
    sliders is the obvious next step, and needs the policy struct crossing the
    FFI boundary rather than only the config JSON.
-4. An isometric renderer, over the same snapshot data the top-down one uses.
-5. A map editor. `validate.rs` exists so that it can surface `Problem::cell` as
+5. An isometric renderer, over the same snapshot data the top-down one uses.
+6. A map editor. `validate.rs` exists so that it can surface `Problem::cell` as
    a highlight rather than letting people draw fabs that strand vehicles.
 
 ## Validating changes

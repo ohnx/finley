@@ -58,6 +58,7 @@
   --m-etch:   #f1d9bf;
   --m-cmp:    #d2ddc8;
   --m-metro:  #ecd8b4;
+  --m-buffer: #d8d2c6;
   --m-other:  #e3dacd;
 }
 
@@ -172,6 +173,7 @@ canvas#fab { display: block; width: 100%; height: auto; cursor: crosshair; }
 }
 .sw.port-in { background: var(--port-in); }
 .sw.port-out { background: var(--port-out); }
+.sw.buffer { background: var(--machine-label); border-radius: 2px; box-shadow: none; width: 6px; height: 12px; }
 .sw.foup { background: var(--carry); box-shadow: inset 0 0 0 1px var(--carry-edge); }
 .sw.heat {
   background: linear-gradient(90deg,
@@ -235,6 +237,10 @@ aside {
 .sub { color: var(--ink-soft); font-size: 11.5px; margin-top: 1px; }
 .sub .kind { color: var(--accent); font-weight: 600; }
 .sub .stalled { color: var(--veh-drop); font-weight: 600; }
+.tag {
+  font-size: 9.5px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--dim); font-weight: 600; margin-left: 4px;
+}
 .xref {
   font: inherit;
   color: var(--accent);

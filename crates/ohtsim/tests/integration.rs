@@ -158,3 +158,50 @@ fn vehicles_do_not_stop_on_the_main_line_and_block_others() {
         );
     }
 }
+
+/// The other kind of deadlock, and the one the demo map actually hits.
+///
+/// Recipes are reentrant -- litho, etch, cmp, litho -- so with only tool ports
+/// to put lots on, the tools can end up holding finished lots for each other in
+/// a cycle: litho waits on etch, etch on cmp, cmp on litho, and nothing can ever
+/// move. Under the default policy it closed at around tick 12,000 and the fab
+/// stopped, with metrics that looked merely disappointing rather than broken.
+///
+/// Buffers break it by giving a finished lot somewhere to go that is not another
+/// tool's port.
+#[test]
+fn buffers_prevent_the_resource_deadlock() {
+    for policy in ["default", "starvation_biased"] {
+        let mut with = world(policy);
+        with.run(20_000);
+        assert_eq!(
+            with.metrics.resource_deadlock_events, 0,
+            "{policy}: deadlocked despite buffers ({} ticks stuck)",
+            with.metrics.resource_deadlock_ticks
+        );
+
+        let (mut map, scen, pol) = fixtures(policy);
+        map.machines.retain(|m| !m.is_buffer());
+        let mut without = World::new(map, scen, pol);
+        without.run(20_000);
+        assert!(
+            without.metrics.lots_completed < with.metrics.lots_completed,
+            "{policy}: buffers should raise throughput ({} without, {} with)",
+            without.metrics.lots_completed,
+            with.metrics.lots_completed
+        );
+
+        // Only `default` is known to close the cycle inside 20k ticks;
+        // starvation_biased keeps the tools drained enough that it does not,
+        // at least on this map. Asserting it for both would be asserting
+        // something that is not true. This half matters because "no deadlock
+        // with buffers" would also pass with a detector that never fires.
+        if policy == "default" {
+            assert!(
+                without.metrics.resource_deadlock_events > 0,
+                "removing the buffers should reopen the deadlock under default, \
+                 but the detector saw none -- detector or fallback is broken"
+            );
+        }
+    }
+}

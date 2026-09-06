@@ -64,6 +64,11 @@ pub struct World {
     /// Job currently attached to each lot, if any.
     lot_job: Vec<Option<JobId>>,
     idle_ticks_of: Vec<u32>,
+    /// Whether the previous tick was already inside a resource deadlock, so an
+    /// episode is counted once rather than every tick it persists.
+    in_resource_deadlock: bool,
+    /// Consecutive ticks with nothing routable, before it counts as a deadlock.
+    resource_stall_ticks: u64,
 }
 
 impl World {
@@ -154,6 +159,8 @@ impl World {
             active_profile: 0,
             lot_job: Vec::new(),
             idle_ticks_of: vec![0; n_veh],
+            in_resource_deadlock: false,
+            resource_stall_ticks: 0,
         }
     }
 
@@ -169,6 +176,7 @@ impl World {
         self.run_machines();
         self.spawn_lots();
         self.create_jobs();
+        self.detect_resource_deadlock();
         self.select_profile();
         self.assign_jobs();
         self.advance_vehicles();
@@ -195,7 +203,9 @@ impl World {
     fn run_machines(&mut self) {
         let now = self.tick_count;
         for m_id in 0..self.machines.len() {
-            if self.machines[m_id].is_source() {
+            // Neither a source nor a buffer processes anything, so neither can
+            // be starved of work and neither pulls lots off its own ports.
+            if self.machines[m_id].is_source() || self.machines[m_id].is_buffer() {
                 continue;
             }
 
@@ -340,7 +350,11 @@ impl World {
                 LotState::AtPort(m, p) => (m, p),
                 _ => continue,
             };
-            if self.machines[m].ports[p].kind != PortKind::Output {
+            // A lot leaves a tool from an output port. A buffer has no
+            // direction: anything sitting in one is waiting to move on.
+            if !self.machines[m].is_buffer()
+                && self.machines[m].ports[p].kind != PortKind::Output
+            {
                 continue;
             }
             if self.lots[lot_id].next_kind().is_none() {
@@ -357,6 +371,52 @@ impl World {
             });
             self.pending.push(jid);
             self.lot_job[lot_id] = Some(jid);
+        }
+    }
+
+    /// Resource deadlock: every pending job is unroutable and nothing in
+    /// flight can change that.
+    ///
+    /// The movement resolver's deadlock detection is about vehicles blocking
+    /// each other on the track. This is the other kind, and the one the demo
+    /// map actually hits: tools holding finished lots that cannot move because
+    /// the tool they need is itself full of finished lots. Without buffers it
+    /// closed a litho -> etch -> cmp -> litho cycle at around tick 12,000 and
+    /// the fab simply stopped, with metrics that looked merely disappointing.
+    fn detect_resource_deadlock(&mut self) {
+        let stuck = !self.pending.is_empty()
+            && self
+                .vehicles
+                .iter()
+                .all(|v| v.carrying.is_none())
+            && self.pending.iter().all(|&jid| {
+                let lot = &self.lots[self.jobs[jid].lot];
+                match lot.next_kind() {
+                    None => true,
+                    Some(kind) => !self.machines.iter().any(|m| {
+                        (m.kind == kind || m.is_buffer()) && m.free_inbound_port().is_some()
+                    }),
+                }
+            });
+
+        // A tick where nothing happens to be routable is not a deadlock -- a
+        // tool finishing frees a port and it clears. Only a state that persists
+        // past a whole tool cycle is genuinely stuck, so the count means
+        // "the fab stopped" rather than "the fab paused".
+        const PERSIST_TICKS: u64 = 300;
+
+        if stuck {
+            self.resource_stall_ticks += 1;
+            if self.resource_stall_ticks >= PERSIST_TICKS {
+                self.metrics.resource_deadlock_ticks += 1;
+                if !self.in_resource_deadlock {
+                    self.metrics.resource_deadlock_events += 1;
+                    self.in_resource_deadlock = true;
+                }
+            }
+        } else {
+            self.resource_stall_ticks = 0;
+            self.in_resource_deadlock = false;
         }
     }
 

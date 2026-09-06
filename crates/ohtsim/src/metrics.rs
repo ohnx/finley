@@ -16,6 +16,14 @@ pub struct Metrics {
     pub machine_idle_ticks: Vec<u64>,
     pub machine_names: Vec<String>,
     pub deadlock_events: u64,
+    /// Times the fab entered a *resource* deadlock: pending work exists, none
+    /// of it has anywhere legal to go, and nothing is in flight to change that.
+    /// Distinct from `deadlock_events`, which is about vehicles blocking each
+    /// other on the track. Counted once per episode, not once per tick.
+    pub resource_deadlock_events: u64,
+    /// Ticks spent inside such an episode, so a brief stall and a permanent
+    /// one are distinguishable.
+    pub resource_deadlock_ticks: u64,
     /// Times a vehicle stayed blocked past `stuck_threshold` and had its route
     /// thrown away and recomputed. Counts *events*, not distinct vehicles: one
     /// vehicle in a bad spot can trigger recovery repeatedly.
@@ -94,6 +102,10 @@ impl Metrics {
         s.push_str(&format!("mean backlog         {:.2} jobs\n", self.mean_backlog()));
         s.push_str(&format!("cycles rotated       {}\n", self.cycles_rotated));
         s.push_str(&format!("deadlock events      {}\n", self.deadlock_events));
+        s.push_str(&format!(
+            "resource deadlocks   {} ({} ticks)\n",
+            self.resource_deadlock_events, self.resource_deadlock_ticks
+        ));
         s.push_str(&format!(
             "stuck recoveries     {}\n",
             self.stuck_vehicle_events

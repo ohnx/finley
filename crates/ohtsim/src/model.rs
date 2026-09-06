@@ -97,6 +97,28 @@ impl Machine {
     pub fn is_sink(&self) -> bool {
         self.kind == "sink"
     }
+
+    /// A buffer holds FOUPs and processes nothing: an overhead hoist buffer or
+    /// under-track storage, the real fab's answer to a tool that has finished a
+    /// lot but has nowhere to put it.
+    ///
+    /// Its ports work in both directions, unlike a tool's. That is not a
+    /// shortcut -- a buffer slot really is somewhere a vehicle both drops off
+    /// and collects, and it means a buffer needs no separate machinery from the
+    /// ports and jobs that already exist.
+    pub fn is_buffer(&self) -> bool {
+        self.kind == "buffer"
+    }
+
+    /// Somewhere a lot can be put down. For a tool that means a free input
+    /// port; for a buffer, any free slot.
+    pub fn free_inbound_port(&self) -> Option<PortId> {
+        if self.is_buffer() {
+            self.ports.iter().position(|p| p.is_free())
+        } else {
+            self.free_port(PortKind::Input)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
