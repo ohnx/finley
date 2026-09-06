@@ -114,9 +114,13 @@ machine `w`/`h` entirely — they are presentational only.
 
 ```
 cargo run --release --bin sweep [ticks] [seeds]   # policy sensitivity
+cargo run --release --bin fleet [ticks]           # throughput vs fleet size
 ```
 
-`OHT_MAP`, `OHT_SCENARIO` and `OHT_VEHICLES` override what it sweeps.
+`OHT_MAP` and `OHT_SCENARIO` override what either one runs; `sweep` also takes
+`OHT_VEHICLES`. `fleet` answers the question `sweep` depends on — whether
+transport is the constraint at all, since the weights cannot move a fab whose
+rate is set by its WIP cap.
 
 Prints how far each policy weight moves the fab against the seed-to-seed noise.
 Short version: at the shipped operating point, barely at all — see `DESIGN.md`.
