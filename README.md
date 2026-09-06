@@ -123,7 +123,9 @@ transport is the constraint at all, since the weights cannot move a fab whose
 rate is set by its WIP cap.
 
 Prints how far each policy weight moves the fab against the seed-to-seed noise.
-Short version: at the shipped operating point, barely at all — see `DESIGN.md`.
+Short version: barely at all, on either map and at every fleet size — the whole
+configuration space is worth about 5% once collapses and deadlocks are excluded.
+`DESIGN.md` has the table and the reason.
 
 `node web/verify.mjs` checks the wasm build reproduces the native numbers, and
 that no class in `app.js` defines a method twice — a duplicate silently shadows
@@ -225,6 +227,21 @@ where the whole fleet waited. It also sent every idle vehicle to the *same*
 empty spur; the losers arrived to find it taken and re-decided from where they
 stood, which is the main line. Keeping the line clear outranks the starvation
 preference — see `DESIGN.md` for the full account.
+
+**The weights still barely matter, and the map was not the reason.** The fab
+map fixed what it was built to fix — dispatch went from ranking 2.3 candidates a
+call to 22.6 — and swept over 400,000 ticks at three fleet sizes the answer is
+unchanged. Every large swing is a collapse (`idle.mode = StayPut` completes
+nothing) or a setting that wedges a seed, not a tuning gain; the real effects
+are `dest_congestion = 0` costing 5% and two route weights worth 2-3% each.
+Transport-limiting the fab at 18 vehicles does not wake them up either. The
+structural reason is that every lot needs the same 68 moves on a symmetric grid,
+so dispatch cannot change how much transport work exists, only how much *empty*
+travel is spent reaching it — and `travel_to_pickup` is exactly that term, which
+is why it is the one that matters and why it matters as a cliff. What the other
+criteria need is heterogeneity: batching, changeover, queue-time windows, rework.
+Those mechanics are not flavour, they are what makes the configuration space
+non-degenerate. `DESIGN.md` has the table.
 
 **The demo map was too small for the game to work.** Dispatch scores every
 (job, vehicle, destination) triple, but on the demo map the mean number of

@@ -594,28 +594,96 @@ litho and the fleet both busy around 71%. See the table above. The numbers that
 made the premise fail are the ones the new map was designed against, and there
 is a test asserting them so a scenario edit cannot quietly undo it.
 
-Whether the *weights* now earn their keep on that map is the next thing to
-measure, and it needs care: the fab's mean cycle time is around 12,000 ticks, so
-a sweep short enough to be cheap is mostly fill transient, and the first attempt
-reported a seed-to-seed spread of ±1.34 on a mean of 1.79 — which turned out not
-to be noise at all, but one seed of three hitting the WIP cliff. Sweeping the
-fab means sweeping at a horizon well past the transient, and reading the
-deadlock column before the throughput column.
+### And the weights still do not earn their keep
+
+They do not. Swept on the fab map over 400 000 ticks and three seeds, at three
+fleet sizes, the answer is the same as on the demo map — and this time it is not
+because dispatch had nothing to choose between.
+
+Sweeping the fab needs care first. Mean cycle time is around 12 000 ticks, so a
+cheap sweep is mostly fill transient; and the first attempt reported a
+seed-to-seed spread of ±1.34 on a mean of 1.79, which was not noise at all but
+one seed of three hitting the WIP cliff. Past the transient and below the cliff
+the noise floor is **±0.01**, which makes small effects readable for the first
+time. Read the deadlock column before the throughput column.
+
+Throughput swing across each knob's whole range, at three fleet sizes:
+
+| knob | 18 veh | 22 veh | 30 veh | |
+|---|---|---|---|---|
+| `idle.mode` | 0.81 | 2.43 | 2.52 | `StayPut`; completes *nothing* at 22 and 30 |
+| `dispatch.travel_to_pickup` | 0.84 | 0.96 | 1.05 | all of it at 0, which also wedges a seed |
+| `dispatch.dest_congestion` | 0.12 | 0.81 | 0.12 | the 22-vehicle figure is one wedged seed, not a slope |
+| `dispatch.steps_remaining` | 0.08 | 0.04 | 0.86 | ditto, at −4 |
+| `route.curve` | 0.05 | 0.07 | 0.08 | monotonic; lower is better |
+| `route.congestion` | 0.05 | 0.05 | 0.07 | monotonic; *higher* is better |
+| `dispatch.dest_queue` | 0.06 | 0.05 | 0.04 | only 64 hurts |
+| `dispatch.lot_wait` | 0.04 | 0.01 | 0.01 | |
+| `dispatch.dest_starvation` | 0.03 | 0.01 | 0.02 | |
+| `dispatch.lot_priority` | 0.02 | 0.01 | 0.01 | |
+| `congestion_decay` | 0.00 | 0.01 | 0.01 | |
+| `idle.dwell_before_move` | 0.00 | 0.00 | 0.00 | bit-identical runs |
+
+Every large number is a collapse or a deadlock, not a tuning gain. Strip those
+out and the whole configuration space is worth **5%**: `dest_congestion = 0`
+costs 5% at every fleet size, `dest_queue = 64` and `route.curve = 8` cost 2-3%
+each, and nothing else clears twice the noise.
+
+### Why: the transport problem is nearly convex
+
+The obvious suspicion was the operating regime — at 30 vehicles the WIP cap sets
+the rate, so dispatch order cannot argue with it. `src/bin/fleet.rs` finds where
+transport binds instead (18 vehicles: fleet 97.6% busy, litho 64%), and sweeping
+there changes nothing. The ranges at 18 are if anything *smaller*. So the
+flatness is not the map, and not the regime.
+
+The structural reason is that every lot needs the same 68 moves on a symmetric
+grid, so dispatch cannot change how much transport work exists — only how much
+*empty* travel is spent getting to it. `travel_to_pickup` is precisely the term
+that controls empty travel, which is why it is the one term that matters, and
+why it matters as a cliff: ignore distance and throughput drops 40%; respect it
+at all and everything from 0.5 upward is identical. There is nothing left for a
+second criterion to express.
+
+What would give the other criteria something to say is **heterogeneity** — a
+reason to prefer one lot or one destination over another:
+
+- a **batch furnace** makes `dest_queue` mean something, because a fuller batch
+  is genuinely better and waiting for one is a real trade;
+- an **implant changeover penalty** makes destination choice mean something,
+  because two tools of the same kind stop being interchangeable;
+- a **clean queue-time window** makes `lot_wait` and `lot_priority` mean
+  something, because a lot near expiry *must* move or be scrapped;
+- **rework** makes `steps_remaining` mean something, because remaining work
+  stops being knowable from the step index.
+
+So the four mechanics in the open questions below are not flavour. They are what
+makes the configuration space non-degenerate, and they should be judged on that
+rather than on realism.
+
+One measurement gap to fix alongside them: the sweep reports throughput, p95 and
+mean cycle, and `lot_priority` cannot show up in any of those. Prioritising the
+5% hot lots does not change how many lots finish — it changes *which* finish
+first. A knob about hot lots needs a hot-lot cycle-time metric before its sweep
+row means anything, and its 0.01 range here should be read as "not measured"
+rather than "does nothing".
 
 `idle.dwell_before_move` deserves a note: it is not dead code, it is dead under
 `NearestPark`. A parked vehicle's own spur is always among its targets, so it
-never decides to move and the dwell timer never gates anything. Under
-`Preposition` it is live (8.54 down to 8.48 across the range).
+never decides to move and the dwell timer never gates anything, which is why its
+runs come out bit-identical. Under `Preposition` it is live — on the demo map,
+8.54 down to 8.48 across the range.
 
 ## Open questions
 
-1. **Run the sensitivity sweep on the fab map**, at a horizon past the fill
-   transient. The demo map's answer ("the weights barely matter") was a
-   property of that map, and the fab map was built specifically to invalidate
-   it. Until this is measured, the premise is argued rather than demonstrated.
-2. **Retune the shipped policies so they show a tradeoff.** On the demo map
-   `starvation_biased` dominates `default` on every axis, which means the two
-   presets do not illustrate a choice. Depends on (1).
+1. ~~Run the sensitivity sweep on the fab map.~~ Done, and the answer is that
+   the weights still do not matter — see above. The premise now depends on the
+   mechanics in (3), which are what give the criteria anything to express.
+2. **Add a hot-lot cycle-time metric**, so `lot_priority` and `lot_wait` are
+   measured by something they can actually move. Throughput cannot see them.
+   Then **retune the shipped policies so they show a tradeoff**: on the demo map
+   `starvation_biased` dominates `default` on every axis, so the two presets
+   illustrate no choice at all.
 3. **The four fab mechanics that are specified but not built**, each of which
    turns a scheduling question into a real one:
    - batch furnace — hold N lots, run when full or when a timer expires, so
