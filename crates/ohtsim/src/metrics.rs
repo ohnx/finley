@@ -9,10 +9,13 @@ pub struct Metrics {
     /// line declined to admit, as distinct from demand that never came.
     pub arrivals_deferred: u64,
     pub lots_completed: u64,
-    /// Cycle time (creation -> done) per completed lot, in ticks.
+    /// Cycle time (creation -> done) per completed lot, in ticks, kept in
+    /// sorted order. Sorted on insert rather than on read because the browser
+    /// asks for the p95 every frame, and cloning and sorting this per frame was
+    /// a cost that grew with the length of the run.
     pub cycle_times: Vec<u64>,
-    /// Ticks each lot spent waiting at a port for collection.
-    pub delivery_waits: Vec<u64>,
+    /// Running total of the above, so the mean needs no scan.
+    cycle_total: u64,
     pub vehicle_busy_ticks: u64,
     pub vehicle_tick_capacity: u64,
     /// Per machine: ticks with nothing to work on.
@@ -32,8 +35,24 @@ pub struct Metrics {
     /// vehicle in a bad spot can trigger recovery repeatedly.
     pub stuck_vehicle_events: u64,
     pub cycles_rotated: u64,
-    /// Sampled every tick: jobs created but not yet assigned.
-    pub backlog_samples: Vec<usize>,
+    /// Running total of the unassigned-job backlog, sampled every tick. A
+    /// total rather than the samples: nothing needs the distribution, and
+    /// keeping one entry per tick meant both unbounded memory and a mean that
+    /// cost a full scan every time the UI drew a frame.
+    backlog_total: u64,
+}
+
+impl Metrics {
+    /// Metrics sized for a fab with these machines. The running totals behind
+    /// the mean values are private, so this exists rather than a struct literal
+    /// with `..Default::default()`.
+    pub fn for_machines(names: Vec<String>) -> Metrics {
+        Metrics {
+            machine_idle_ticks: vec![0; names.len()],
+            machine_names: names,
+            ..Default::default()
+        }
+    }
 }
 
 fn percentile(sorted: &[u64], p: f64) -> u64 {
@@ -63,22 +82,33 @@ impl Metrics {
         if self.cycle_times.is_empty() {
             return 0.0;
         }
-        self.cycle_times.iter().sum::<u64>() as f64 / self.cycle_times.len() as f64
+        self.cycle_total as f64 / self.cycle_times.len() as f64
     }
 
     /// The tail matters more than the mean; a policy that fixes the average by
     /// starving a few lots is a bad policy.
+    /// Free: `cycle_times` is maintained in sorted order.
     pub fn p95_cycle_time(&self) -> u64 {
-        let mut s = self.cycle_times.clone();
-        s.sort_unstable();
-        percentile(&s, 0.95)
+        percentile(&self.cycle_times, 0.95)
+    }
+
+    /// Record a completed lot's cycle time, keeping the series sorted.
+    pub fn record_cycle(&mut self, ticks: u64) {
+        let at = self.cycle_times.partition_point(|&c| c < ticks);
+        self.cycle_times.insert(at, ticks);
+        self.cycle_total += ticks;
+    }
+
+    /// Sample the unassigned-job backlog for this tick.
+    pub fn record_backlog(&mut self, pending: usize) {
+        self.backlog_total += pending as u64;
     }
 
     pub fn mean_backlog(&self) -> f64 {
-        if self.backlog_samples.is_empty() {
+        if self.ticks == 0 {
             return 0.0;
         }
-        self.backlog_samples.iter().sum::<usize>() as f64 / self.backlog_samples.len() as f64
+        self.backlog_total as f64 / self.ticks as f64
     }
 
     pub fn report(&self) -> String {

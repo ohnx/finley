@@ -63,6 +63,10 @@ pub struct World {
     pub active_profile: usize,
     /// Job currently attached to each lot, if any.
     lot_job: Vec<Option<JobId>>,
+    /// Lots still in the fab. `lots` keeps every lot ever made, so anything
+    /// that scans it once per tick gets slower the longer the run goes -- the
+    /// tick rate used to halve over 400k ticks for exactly that reason.
+    active_lots: Vec<LotId>,
     idle_ticks_of: Vec<u32>,
     /// Whether the previous tick was already inside a resource deadlock, so an
     /// episode is counted once rather than every tick it persists.
@@ -133,11 +137,7 @@ impl World {
             });
         }
 
-        let metrics = Metrics {
-            machine_idle_ticks: vec![0; machines.len()],
-            machine_names: machines.iter().map(|m| m.name.clone()).collect(),
-            ..Default::default()
-        };
+        let metrics = Metrics::for_machines(machines.iter().map(|m| m.name.clone()).collect());
 
         let n_veh = vehicles.len();
         World {
@@ -158,6 +158,7 @@ impl World {
             tick_count: 0,
             active_profile: 0,
             lot_job: Vec::new(),
+            active_lots: Vec::new(),
             idle_ticks_of: vec![0; n_veh],
             in_resource_deadlock: false,
             resource_stall_ticks: 0,
@@ -252,9 +253,10 @@ impl World {
 
                 if step_now >= self.lots[lot_id].recipe.len() {
                     self.lots[lot_id].state = LotState::Done;
+                    self.active_lots.retain(|&l| l != lot_id);
                     self.metrics.lots_completed += 1;
                     let created = self.lots[lot_id].created_tick;
-                    self.metrics.cycle_times.push(now.saturating_sub(created));
+                    self.metrics.record_cycle(now.saturating_sub(created));
                     continue;
                 }
 
@@ -300,12 +302,7 @@ impl World {
         // different caps still see the same demand at the same ticks, which is
         // the only way a cap sweep compares like with like.
         if self.scenario.wip_cap > 0 {
-            let wip = self
-                .lots
-                .iter()
-                .filter(|l| l.state != LotState::Done)
-                .count();
-            if wip >= self.scenario.wip_cap {
+            if self.active_lots.len() >= self.scenario.wip_cap {
                 self.metrics.arrivals_deferred += 1;
                 return;
             }
@@ -351,12 +348,14 @@ impl World {
             priority: if hot { 1.0 } else { 0.0 },
         });
         self.lot_job.push(None);
+        self.active_lots.push(lot_id);
         self.machines[src].ports[port].lot = Some(lot_id);
         self.metrics.lots_created += 1;
     }
 
     fn create_jobs(&mut self) {
-        for lot_id in 0..self.lots.len() {
+        for idx in 0..self.active_lots.len() {
+            let lot_id = self.active_lots[idx];
             if self.lot_job[lot_id].is_some() {
                 continue;
             }
@@ -580,9 +579,6 @@ impl World {
                     self.machines[dest.0].ports[dest.1].reserved_by = None;
                     self.lots[lot].state = LotState::AtPort(dest.0, dest.1);
                     self.lots[lot].waiting_since = now;
-                    self.metrics
-                        .delivery_waits
-                        .push(now.saturating_sub(self.jobs[job].created_tick));
                     self.vehicles[v].carrying = None;
                     self.vehicles[v].state = VehState::Idle;
                     self.lot_job[lot] = None;
@@ -869,7 +865,7 @@ impl World {
     }
 
     fn collect_metrics(&mut self) {
-        self.metrics.backlog_samples.push(self.pending.len());
+        self.metrics.record_backlog(self.pending.len());
         self.metrics.vehicle_tick_capacity += self.vehicles.len() as u64;
         for v in &mut self.vehicles {
             if v.state != VehState::Idle {
@@ -886,6 +882,18 @@ impl World {
     /// Struct-of-arrays snapshot for the renderer. Kept flat deliberately: the
     /// wasm build should expose pointers into these and let JS read linear
     /// memory as typed arrays, rather than serialising state every frame.
+    /// Total jobs ever created. Useful for spotting per-tick work that scales
+    /// with the length of the run rather than the size of the fab.
+    pub fn jobs_len(&self) -> usize {
+        self.jobs.len()
+    }
+
+    /// Lots still in the fab, in creation order. Everything that walks lots
+    /// every tick should walk this, not `lots`.
+    pub fn active_lots(&self) -> &[LotId] {
+        &self.active_lots
+    }
+
     pub fn snapshot(&self) -> Snapshot {
         let mut s = Snapshot::default();
         self.snapshot_into(&mut s);

@@ -52,7 +52,7 @@ const M = {
 
 // Slider stop -> ticks advanced per animation frame. Sub-1 values are
 // accumulated so "0.25" really is a quarter-speed crawl rather than a stutter.
-const SPEEDS = [0.25, 1, 2, 4, 10, 40, 200];
+const SPEEDS = [0.25, 1, 2, 4, 10, 40, 200, 800];
 
 // Every canvas colour comes from style.css, read once here. Keeping the palette
 // in one place means a retheme touches only the stylesheet -- and reading it per

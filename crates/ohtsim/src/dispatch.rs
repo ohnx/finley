@@ -25,6 +25,9 @@ struct Candidate {
     score: f32,
     vehicle: VehicleId,
     job: JobId,
+    /// Position of `job` within `pending`, so the "already assigned" mask can
+    /// be sized by the pending queue instead of by every job ever created.
+    slot: usize,
     dest: (MachineId, PortId),
 }
 
@@ -82,7 +85,7 @@ pub fn plan(
 
     let mut candidates: Vec<Candidate> = Vec::new();
 
-    for &jid in pending {
+    for (slot, &jid) in pending.iter().enumerate() {
         let job = &jobs[jid];
         let lot = &lots[job.lot];
         let pickup_cell = machines[job.from.0].ports[job.from.1].cell;
@@ -131,6 +134,7 @@ pub fn plan(
                     score,
                     vehicle: *v,
                     job: jid,
+                    slot,
                     dest: (m_id, port),
                 });
             }
@@ -149,12 +153,15 @@ pub fn plan(
     });
 
     let mut used_veh: Vec<bool> = vec![false; vehicles.len()];
-    let mut used_job: Vec<bool> = vec![false; jobs.len()];
+    // Indexed by position within `pending`, not by job id: job ids run to
+    // every job the fab has ever created, so sizing by them made this
+    // allocation grow without bound over a long run.
+    let mut used_job: Vec<bool> = vec![false; pending.len()];
     let mut used_port: Vec<(MachineId, PortId)> = Vec::new();
     let mut out = Vec::new();
 
     for c in candidates {
-        if used_veh[c.vehicle] || used_job[c.job] {
+        if used_veh[c.vehicle] || used_job[c.slot] {
             continue;
         }
         if used_port.contains(&c.dest) {
@@ -174,7 +181,7 @@ pub fn plan(
             None => continue,
         };
         used_veh[c.vehicle] = true;
-        used_job[c.job] = true;
+        used_job[c.slot] = true;
         used_port.push(c.dest);
         out.push(Assignment {
             vehicle: c.vehicle,

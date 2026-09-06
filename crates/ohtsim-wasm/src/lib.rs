@@ -104,9 +104,14 @@ impl Sim {
         self.machine_idle
             .extend(self.world.machines.iter().map(|m| m.idle_ticks as u32));
 
-        self.cycles.clear();
-        self.cycles
-            .extend(self.world.metrics.cycle_times.iter().map(|&c| c as f64));
+        // Rebuilt only when a lot has completed. Copying the whole series
+        // every frame is work proportional to the length of the run, for a
+        // histogram that changes a few times a minute.
+        if self.cycles.len() != self.world.metrics.cycle_times.len() {
+            self.cycles.clear();
+            self.cycles
+                .extend(self.world.metrics.cycle_times.iter().map(|&c| c as f64));
+        }
 
         let m = &self.world.metrics;
         self.metrics = [
@@ -146,9 +151,10 @@ impl Sim {
         l.priority.clear();
 
         let now = self.world.tick_count;
-        for lot in &self.world.lots {
+        for &lot_id in self.world.active_lots() {
+            let lot = &self.world.lots[lot_id];
             let (place, a, b) = match lot.state {
-                LotState::Done => continue,
+                LotState::Done => continue, // retired between refreshes
                 LotState::AtPort(m, p) => (LOT_AT_PORT, m as u16, p as u16),
                 LotState::InTransit(v) => (LOT_IN_TRANSIT, v as u16, 0),
                 LotState::Processing(m) => {
