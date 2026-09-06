@@ -101,6 +101,13 @@ Machine footprints sit *under* the track. That is not an overlap bug: rails are
 ceiling-mounted, so they legitimately run over tools, and the sim ignores
 machine `w`/`h` entirely — they are presentational only.
 
+```
+cargo run --release --bin sweep          # policy sensitivity, one knob at a time
+```
+
+Prints how far each policy weight moves the fab against the seed-to-seed noise.
+Short version: at the shipped operating point, barely at all — see `DESIGN.md`.
+
 `node web/verify.mjs` checks the wasm build reproduces the native numbers, and
 that no class in `app.js` defines a method twice — a duplicate silently shadows
 the earlier definition, and the only symptom is a blank canvas.

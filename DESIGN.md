@@ -392,6 +392,65 @@ nothing failed loudly — there is now a test asserting every vehicle carries a
 job. And fleet size and WIP cap interact: they are two knobs on the same curve,
 and neither can be tuned alone.
 
+## Do the weights actually do anything?
+
+The design premise is that the interesting behaviour lives in the *basis* of
+weighted criteria rather than in a menu of presets. `cargo run --release --bin
+sweep` tests that: it moves one knob at a time from the shipped default over
+200 000 ticks and four seeds, and prints the seed-to-seed spread so an effect
+can be read against the noise it has to beat.
+
+At the shipped operating point (five vehicles, cap 16) the answer is mostly no.
+Throughput swing across each knob's whole range, against a seed-to-seed spread
+of **±0.03**:
+
+| knob | swing | |
+|---|---|---|
+| `idle.mode` | 8.33 | `StayPut` collapses the fab to 0.27/1k |
+| `dispatch.travel_to_pickup` | 4.26 | all of it between 0 and 1; ≥1 is flat |
+| `dispatch.dest_congestion` | 1.68 | monotonic, and lower is better than the default |
+| `dispatch.lot_wait` | 0.65 | raising it hurts |
+| `dispatch.dest_queue` | 0.44 | |
+| `dispatch.dest_starvation` | 0.27 | |
+| `dispatch.steps_remaining` | 0.09 | |
+| `dispatch.lot_priority` | 0.07 | |
+| `route.congestion` | 0.06 | |
+| `route.curve` | 0.05 | |
+| `congestion_decay` | 0.04 | at the noise floor |
+| `idle.dwell_before_move` | 0.00 | bit-identical runs |
+
+Two of the three that move anything are "do not set this stupidly" rather than
+tuning: `StayPut` parks vehicles on the main line, and `travel_to_pickup = 0`
+means ignoring how far away the vehicle is. Above those cliffs everything is
+flat. Tuning the best settings together gains 1.4% over the shipped default, and
+they do not compose — `travel_to_pickup` and `dest_congestion` are substitutes,
+not additive.
+
+### Why: dispatch has nothing to choose between
+
+At five vehicles the fab is transport-saturated at 97.7% utilisation, and the
+mean number of vehicles available to assign is **0.24**. Both more than one
+idle vehicle and more than one pending job — an actual choice — happens on
+**2.3% of ticks**. A weighted scoring function over criteria cannot express
+anything when there is one candidate.
+
+At six vehicles that rises to 22.7% of ticks, ten times the choice. But six is
+also where the fab turns chaotic: the seed-to-seed spread goes from ±0.03 to
+**±2.69**, as large as the effects themselves, so the bigger swings there are
+the job stream rather than the policy.
+
+So the configuration space is currently inert, and the game premise does not yet
+hold on this map. The fix is not a policy change: the loop is too small for a
+fleet with slack in it, so there is never a decision worth making. A larger map
+with more track per vehicle would give dispatch real choices without tipping
+into congestion collapse — that is now the most interesting thing to try, and it
+is a level-editor question rather than a tuning one.
+
+`idle.dwell_before_move` deserves a note: it is not dead code, it is dead under
+`NearestPark`. A parked vehicle's own spur is always among its targets, so it
+never decides to move and the dwell timer never gates anything. Under
+`Preposition` it is live (8.54 down to 8.48 across the range).
+
 ## Open questions
 
 1. **Retune the shipped policies so they show a tradeoff again** (see above).

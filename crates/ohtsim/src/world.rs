@@ -513,6 +513,11 @@ impl World {
         self.jobs.len()
     }
 
+    /// Jobs created but not yet assigned.
+    pub fn pending_len(&self) -> usize {
+        self.pending.len()
+    }
+
     /// Lots still in the fab, in creation order. Everything that walks lots
     /// every tick should walk this, not `lots`.
     pub fn active_lots(&self) -> &[LotId] {
