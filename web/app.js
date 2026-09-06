@@ -312,48 +312,29 @@ class Renderer {
     }
   }
 
-  /// A tool is drawn as its body plus a neck out to each of its load ports, so
-  /// a port reads as part of the machine it belongs to.
+  /// A tool's body, plus the cell each of its load ports sits on.
   ///
-  /// The map places ports wherever the track runs, which is not always against
-  /// the tool: metro1's are two cells clear of its body. A bounding box round
-  /// body and ports would close that gap, but ports sit on opposite faces, so
-  /// the box also swallows cells the tool has nothing to do with and collides
-  /// with its neighbours. A neck to the nearest point of the body connects the
-  /// two and claims nothing else, and it handles a port set diagonally without
-  /// any special case.
+  /// Every body is placed against its own ports in the map, so the two fills
+  /// meet and read as one machine with no connector drawn between them.
+  /// `reference/gen_map2.py` enforces that when the map is generated -- the
+  /// alternative, drawing a neck from a floating body out to a distant port,
+  /// papers over a map that is wrong rather than fixing it.
   drawMachines() {
     const { ctx, cell, p } = this;
     ctx.font = "500 11px ui-sans-serif, system-ui, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     const inset = 2;
-    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
     for (const m of this.map.machines) {
-      const colour = p[`--m-${m.kind}`] || p["--m-other"];
-      const L = m.x * cell, T = m.y * cell;
-      const R = L + m.w * cell, B = T + m.h * cell;
-
-      ctx.fillStyle = colour;
-      ctx.strokeStyle = colour;
-      ctx.lineCap = "round";
-      ctx.lineWidth = cell * 0.5;
-
+      ctx.fillStyle = p[`--m-${m.kind}`] || p["--m-other"];
       for (const port of m.ports) {
         const [px, py] = port.cell;
-        const cx = px * cell + cell / 2;
-        const cy = py * cell + cell / 2;
-        ctx.beginPath();
-        ctx.moveTo(cx, cy);
-        ctx.lineTo(clamp(cx, L, R), clamp(cy, T, B));
-        ctx.stroke();
         this.roundRect(px * cell + inset, py * cell + inset,
                        cell - inset * 2, cell - inset * 2, 3);
         ctx.fill();
       }
-
-      this.roundRect(L + inset, T + inset,
+      this.roundRect(m.x * cell + inset, m.y * cell + inset,
                      m.w * cell - inset * 2, m.h * cell - inset * 2, 3);
       ctx.fill();
       ctx.strokeStyle = p["--machine-edge"];

@@ -260,7 +260,7 @@
    "kind": "source",
    "x": 1,
    "y": 1,
-   "w": 3,
+   "w": 4,
    "h": 2,
    "process_ticks": 0,
    "capacity": 3,
@@ -343,10 +343,10 @@
   {
    "name": "etch1",
    "kind": "etch",
-   "x": 13,
+   "x": 14,
    "y": 1,
-   "w": 2,
-   "h": 1,
+   "w": 1,
+   "h": 2,
    "process_ticks": 90,
    "capacity": 2,
    "ports": [
@@ -447,7 +447,7 @@
   {
    "name": "metro1",
    "kind": "metro",
-   "x": 2,
+   "x": 1,
    "y": 8,
    "w": 2,
    "h": 2,

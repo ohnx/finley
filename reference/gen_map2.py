@@ -60,16 +60,20 @@ for _name, cells, park in SPURS:
     PARKING.extend(park)
 
 # --- machines ---------------------------------------------------------------
+# Body rectangles are presentational -- the simulation only ever looks at ports
+# -- but each body must sit orthogonally against every one of its own ports, or
+# the picture shows a tool floating away from the load ports that serve it.
+# `check_bodies_touch_their_ports` below enforces that.
 # litho is the intended bottleneck: 2 tools x 2 chambers / 120 ticks, and the
 # main recipe visits litho twice, giving ~16.7 lots per 1000 ticks of headroom.
 MACHINES = [
-    dict(name="src",    kind="source", x=1,  y=1, w=3, h=2, process_ticks=0,   capacity=3,
+    dict(name="src",    kind="source", x=1,  y=1, w=4, h=2, process_ticks=0,   capacity=3,
          ports=[("out", (2, 0)), ("out", (3, 0)), ("out", (4, 0))]),
     dict(name="litho1", kind="litho",  x=5,  y=1, w=2, h=3, process_ticks=120, capacity=2,
          ports=[("in", (5, 0)), ("out", (6, 0))]),
     dict(name="litho2", kind="litho",  x=9,  y=1, w=2, h=3, process_ticks=120, capacity=2,
          ports=[("in", (9, 0)), ("out", (10, 0))]),
-    dict(name="etch1",  kind="etch",   x=13, y=1, w=2, h=1, process_ticks=90,  capacity=2,
+    dict(name="etch1",  kind="etch",   x=14, y=1, w=1, h=2, process_ticks=90,  capacity=2,
          ports=[("in", (15, 1)), ("out", (15, 2))]),
     dict(name="etch2",  kind="etch",   x=13, y=7, w=2, h=2, process_ticks=90,  capacity=2,
          ports=[("in", (15, 7)), ("out", (15, 8))]),
@@ -77,7 +81,7 @@ MACHINES = [
          ports=[("in", (12, 11)), ("out", (11, 11))]),
     dict(name="cmp2",   kind="cmp",    x=5,  y=9, w=2, h=2, process_ticks=60,  capacity=1,
          ports=[("in", (6, 11)), ("out", (5, 11))]),
-    dict(name="metro1", kind="metro",  x=2,  y=8, w=2, h=2, process_ticks=30,  capacity=2,
+    dict(name="metro1", kind="metro",  x=1,  y=8, w=2, h=2, process_ticks=30,  capacity=2,
          ports=[("in", (0, 9)), ("out", (0, 8))]),
     dict(name="sink",   kind="sink",   x=1,  y=3, w=2, h=2, process_ticks=1,   capacity=4,
          ports=[("in", (0, 3))]),
@@ -171,6 +175,19 @@ for p in PARKING:
         errors.append(f"parking {p} cannot rejoin the track")
     if not rev[p]:
         errors.append(f"parking {p} is unreachable")
+
+# Each body must share an edge with every port it owns. Diagonal does not
+# count: it leaves a visible gap at the corner.
+for mm in MACHINES:
+    x0, y0 = mm["x"], mm["y"]
+    x1, y1 = x0 + mm["w"] - 1, y0 + mm["h"] - 1
+    for kind, (px, py) in mm["ports"]:
+        touching = ((x0 - 1 <= px <= x1 + 1 and y0 <= py <= y1)
+                    or (y0 - 1 <= py <= y1 + 1 and x0 <= px <= x1))
+        if not touching:
+            errors.append(
+                f"{mm['name']}: body ({x0},{y0})-({x1},{y1}) does not touch "
+                f"its {kind} port ({px},{py})")
 
 if errors:
     print("MAP VALIDATION FAILED")

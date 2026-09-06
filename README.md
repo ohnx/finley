@@ -51,9 +51,9 @@ On the map: track is drawn as one-way arrows, congestion as a heat wash that
 shows traffic waves propagating backward from a hoisting vehicle, and spur cells
 are tinted so parking reads as distinct from the main line.
 
-Each tool is drawn as its body plus a neck out to each of its load ports, so a
-port reads as part of the machine it serves — the map places ports wherever the
-track runs, which is not always against the tool. A port itself is a bay,
+Each tool is drawn as its body together with the cells its load ports sit on,
+which meet because every body is placed against its own ports in the map —
+`reference/gen_map2.py` checks that when it generates one. A port is a bay,
 coloured green for in and rust for out, with the lot drawn sitting on it when
 one is there. Watching out-bays fill is watching backpressure arrive.
 
