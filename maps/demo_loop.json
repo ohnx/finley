@@ -343,9 +343,9 @@
   {
    "name": "etch1",
    "kind": "etch",
-   "x": 14,
+   "x": 13,
    "y": 1,
-   "w": 1,
+   "w": 2,
    "h": 2,
    "process_ticks": 90,
    "capacity": 2,

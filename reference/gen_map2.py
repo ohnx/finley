@@ -63,7 +63,8 @@ for _name, cells, park in SPURS:
 # Body rectangles are presentational -- the simulation only ever looks at ports
 # -- but each body must sit orthogonally against every one of its own ports, or
 # the picture shows a tool floating away from the load ports that serve it.
-# `check_bodies_touch_their_ports` below enforces that.
+# Checked below, along with the rule that actually constrains the fab: a port
+# may never sit on a parking spur. A body may.
 # litho is the intended bottleneck: 2 tools x 2 chambers / 120 ticks, and the
 # main recipe visits litho twice, giving ~16.7 lots per 1000 ticks of headroom.
 MACHINES = [
@@ -73,7 +74,11 @@ MACHINES = [
          ports=[("in", (5, 0)), ("out", (6, 0))]),
     dict(name="litho2", kind="litho",  x=9,  y=1, w=2, h=3, process_ticks=120, capacity=2,
          ports=[("in", (9, 0)), ("out", (10, 0))]),
-    dict(name="etch1",  kind="etch",   x=14, y=1, w=1, h=2, process_ticks=90,  capacity=2,
+    # The body covers the (13,1) spur, which is fine -- rails are ceiling
+    # mounted, so a parked vehicle passes over the tool. A *port* on a spur
+    # would not be: routing treats spurs as destination-only, so the tool would
+    # become unservable. That is checked separately below.
+    dict(name="etch1",  kind="etch",   x=13, y=1, w=2, h=2, process_ticks=90,  capacity=2,
          ports=[("in", (15, 1)), ("out", (15, 2))]),
     dict(name="etch2",  kind="etch",   x=13, y=7, w=2, h=2, process_ticks=90,  capacity=2,
          ports=[("in", (15, 7)), ("out", (15, 8))]),
