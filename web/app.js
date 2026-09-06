@@ -14,8 +14,14 @@
 // One source of truth.
 
 const ROOT = "..";
-const MAP = "maps/demo_loop.json";
-const SCENARIO = "scenarios/baseline.json";
+
+// The selectable fabs, keyed by the value of the header's <select>. A scenario
+// is written against one map -- it names start cells and recipe steps by that
+// map's tools -- so the two travel together.
+const SCENES = {
+  fab: { map: "maps/fab.json", scenario: "scenarios/fab.json" },
+  demo_loop: { map: "maps/demo_loop.json", scenario: "scenarios/baseline.json" },
+};
 
 // Exit-direction bitmask, matching src/geom.rs: a cell holds the OR of the
 // directions you may *leave* it by.
@@ -213,7 +219,14 @@ class Renderer {
     this.p = readPalette();
     this.cell = 44;
     this.resize();
-    addEventListener("resize", () => this.resize());
+    // Kept so a rebuilt renderer can drop it: switching fab makes a new
+    // Renderer, and a stale listener would keep resizing a dead canvas.
+    this.onResize = () => this.resize();
+    addEventListener("resize", this.onResize);
+  }
+
+  dispose() {
+    removeEventListener("resize", this.onResize);
   }
 
   // Backing store is sized in device pixels so the fab stays crisp on HiDPI,
@@ -671,6 +684,27 @@ function renderMachines(map, mach, idle, tick) {
   }).join("");
 }
 
+// Ticks as fab wall-clock. The scenario says what a tick is worth; the
+// simulation itself is unitless, and a cycle time of "12,000" means nothing
+// until you know it is most of a day.
+let TICK_SECONDS = 0;
+
+/// Lots per 1000 ticks restated as lots per fab day.
+function perDay(per1k) {
+  return (per1k / 1000) * (86400 / TICK_SECONDS);
+}
+
+function dur(ticks) {
+  if (!TICK_SECONDS) return "";
+  const s = Math.round(ticks * TICK_SECONDS);
+  if (s < 90) return `${s}s`;
+  const m = Math.round(s / 60);
+  if (m < 90) return `${m}m`;
+  const h = s / 3600;
+  if (h < 48) return `${h.toFixed(h < 10 ? 1 : 0)}h`;
+  return `${(h / 24).toFixed(1)}d`;
+}
+
 /// Cycle-time distribution. A histogram rather than a mean because the whole
 /// point of comparing policies here is the shape of the tail: two policies can
 /// agree on the average and disagree completely on the worst lot.
@@ -703,11 +737,17 @@ function renderHistogram(canvas, cycles) {
   const pct = (q) => sorted[Math.min(sorted.length - 1,
     Math.floor((sorted.length - 1) * q))];
   const p50 = pct(0.5), p95 = pct(0.95);
+  const min = sorted[0];
   const max = sorted[sorted.length - 1];
   const BINS = 24;
-  const hi = Math.max(max, 1);
+  // Spanning the observed range rather than zero to worst. A fab whose lots
+  // all finish between 11k and 14k ticks would otherwise draw its entire
+  // distribution inside the last fifth of the axis, which is the shape you
+  // most want to see and the one a zero-based axis hides.
+  const lo = min, hi = Math.max(max, min + 1);
   const bins = new Array(BINS).fill(0);
-  for (const c of sorted) bins[Math.min(BINS - 1, Math.floor((c / hi) * BINS))]++;
+  const at = (v) => (v - lo) / (hi - lo);
+  for (const c of sorted) bins[Math.min(BINS - 1, Math.floor(at(c) * BINS))]++;
   const peak = Math.max(...bins);
 
   const padB = 16;
@@ -725,7 +765,7 @@ function renderHistogram(canvas, cycles) {
   ctx.font = "10px ui-sans-serif, system-ui, sans-serif";
   const padT = 12;
   for (const [v, label] of [[p50, "p50"], [p95, "p95"]]) {
-    const x = (v / hi) * w;
+    const x = at(v) * w;
     ctx.strokeStyle = sel;
     ctx.setLineDash([3, 2]);
     ctx.beginPath();
@@ -743,13 +783,15 @@ function renderHistogram(canvas, cycles) {
   }
   ctx.fillStyle = dim;
   ctx.textAlign = "left";
-  ctx.fillText("0", 1, h - 5);
+  ctx.fillText(`${fmt(lo)}t`, 1, h - 5);
   ctx.textAlign = "right";
   ctx.fillText(`${fmt(hi)}t`, w - 1, h - 5);
   void ink;
 
+  const clock = TICK_SECONDS ? ` (median ${dur(p50)})` : "";
   $("histnote").textContent =
-    `${cycles.length} completed · median ${fmt(p50)} · p95 ${fmt(p95)} · worst ${fmt(max)} ticks`;
+    `${cycles.length} completed · median ${fmt(p50)} · p95 ${fmt(p95)} · ` +
+    `worst ${fmt(max)} ticks${clock}`;
 }
 
 function renderMetrics(m) {
@@ -761,8 +803,12 @@ function renderMetrics(m) {
     ["arrivals deferred", fmt(m[M.DEFERRED])],
     ["lots created", fmt(m[M.CREATED])],
     ["lots completed", fmt(m[M.COMPLETED])],
-    ["throughput", `${fmt(m[M.THROUGHPUT], 2)} /1k ticks`],
-    ["cycle mean", `${fmt(m[M.MEAN_CYCLE])} ticks`],
+    ["throughput", TICK_SECONDS
+      ? `${fmt(m[M.THROUGHPUT], 2)} /1k ticks · ${fmt(perDay(m[M.THROUGHPUT]), 0)} /day`
+      : `${fmt(m[M.THROUGHPUT], 2)} /1k ticks`],
+    ["cycle mean", TICK_SECONDS
+      ? `${fmt(m[M.MEAN_CYCLE])} ticks · ${dur(m[M.MEAN_CYCLE])}`
+      : `${fmt(m[M.MEAN_CYCLE])} ticks`],
     ["utilisation", `${fmt(m[M.UTIL] * 100, 1)}%`],
     ["vehicles busy", fmt(m[M.BUSY_NOW])],
     ["backlog now", fmt(m[M.BACKLOG_NOW])],
@@ -785,16 +831,10 @@ async function text(rel) {
 }
 
 async function main() {
-  let wasmExports, mapText, scenText;
+  let wasmExports;
   try {
-    const [wasm, mt, st] = await Promise.all([
-      WebAssembly.instantiateStreaming(fetch("ohtsim.wasm"), {}),
-      text(MAP),
-      text(SCENARIO),
-    ]);
+    const wasm = await WebAssembly.instantiateStreaming(fetch("ohtsim.wasm"), {});
     wasmExports = wasm.instance.exports;
-    mapText = mt;
-    scenText = st;
   } catch (err) {
     fail(`Failed to load.\n\n${err.message}\n\n` +
          `Build the module and serve from the repo root:\n` +
@@ -802,21 +842,39 @@ async function main() {
     return;
   }
 
-  const map = JSON.parse(mapText);
-  const recipes = JSON.parse(scenText).recipes || [];
-  $("mapname").textContent =
-    `${map.name} · ${map.width}×${map.height} · ${map.machines.length} tools`;
-
-  const renderer = new Renderer($("fab"), map);
   const sel = { lot: -1, oht: -1, lotCell: null };
+  let map = null, recipes = [], renderer = null;
   let sim = null;
   let running = true;
   let carry = 0;
   let tab = "lots";
 
+  // Everything downstream of the map -- geometry, recipes, the renderer's
+  // scale -- is rebuilt here, so switching fab is the same code path as
+  // resetting one.
   async function build() {
     if (sim) sim.free();
-    const polText = await text(`policies/${$("policy").value}.json`);
+    sim = null;
+    const scene = SCENES[$("scene").value];
+    let mapText, scenText, polText;
+    try {
+      [mapText, scenText, polText] = await Promise.all([
+        text(scene.map),
+        text(scene.scenario),
+        text(`policies/${$("policy").value}.json`),
+      ]);
+    } catch (err) {
+      fail(`Failed to load.\n\n${err.message}`);
+      return;
+    }
+    map = JSON.parse(mapText);
+    const scen = JSON.parse(scenText);
+    recipes = scen.recipes || [];
+    TICK_SECONDS = scen.tick_seconds || 0;
+    if (renderer) renderer.dispose();
+    renderer = new Renderer($("fab"), map);
+    $("mapname").textContent =
+      `${map.name} · ${map.width}×${map.height} · ${map.machines.length} tools`;
     try {
       sim = new Sim(wasmExports, mapText, scenText, polText);
     } catch (err) {
@@ -825,18 +883,20 @@ async function main() {
       return;
     }
     carry = 0;
-    // Selections name lots and vehicles in the old world; keep the OHT (ids
-    // are stable, there are always eight) and drop the lot.
+    // Selections name lots and vehicles in the old world, and a different map
+    // has a different fleet, so both are dropped.
     sel.lot = -1;
+    sel.oht = -1;
     sel.lotCell = null;
     paint();
   }
 
   function paint() {
-    if (!sim) return;
+    if (!sim || !renderer) return;
     const veh = sim.vehicles();
     const metrics = sim.metrics();
     $("tickval").textContent = fmt(metrics[M.TICK]);
+    $("tickclock").textContent = TICK_SECONDS ? `tick · ${dur(metrics[M.TICK])}` : "tick";
 
     // The canvas rings the followed lot whichever tab is showing, so its
     // position is resolved every frame; the list itself only when visible.
@@ -882,6 +942,7 @@ async function main() {
   });
   $("reset").addEventListener("click", build);
   $("policy").addEventListener("change", build);
+  $("scene").addEventListener("change", build);
   $("speed").addEventListener("input", () => {
     $("speedlabel").textContent = `${SPEEDS[+$("speed").value]}×`;
   });

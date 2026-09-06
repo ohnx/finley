@@ -25,11 +25,12 @@ crates/ohtsim/           the simulation core, no dependencies
   tests/                 whole-tick-loop properties
 crates/ohtsim-wasm/      browser shim; raw C ABI, no wasm-bindgen
 web/                     the UI: build.sh, serve.sh, verify.mjs, and the page
-maps/                    fab layouts
+maps/                    fab layouts: fab.json (20 tools), demo_loop.json (9)
 scenarios/               what work arrives
 policies/                how it is dispatched
 reference/               Python prototypes; the behavioural ground truth
-                         (trace_sim.py is the Python side of src/bin/trace.rs)
+                         (trace_sim.py is the Python side of src/bin/trace.rs,
+                         gen_fab.py generates maps/fab.json)
 ```
 
 ## Running the UI
@@ -45,8 +46,19 @@ and `WebAssembly.instantiateStreaming` needs a real MIME type.
 
 The page ticks the actual simulation — it is not a replay. Play/pause/step, a
 speed slider up to 200 ticks per frame (about 12,000 ticks/second in Chromium),
-and a policy selector that rebuilds the world so the two shipped policies can be
-compared by eye.
+a fab picker, and a policy selector. Both pickers rebuild the world, so two
+policies or two layouts can be compared by eye.
+
+Two fabs ship. **fab** is the default: 31×17, 20 tools across seven kinds, 30
+vehicles, and a 68-move recipe — the one the game is actually about. **demo
+loop** is the original 9-tool map, kept because it is small enough to follow a
+single vehicle around and because most of the invariants were found on it.
+
+A tick is **five seconds** of fab time (`tick_seconds` in the scenario). The
+simulation itself is unitless; the scale exists so the UI can say "17h" next to
+a cycle time of 12,142 ticks, and "38 lots/day" next to 2.22 per 1000 ticks.
+Five seconds is roughly one vehicle move, which keeps movement legible at 1×
+while making a full lot's journey watchable in under a minute at 200×.
 
 On the map: track is drawn as one-way arrows, congestion as a heat wash that
 shows traffic waves propagating backward from a hoisting vehicle, and spur cells
@@ -58,14 +70,10 @@ which meet because every body is placed against its own ports in the map —
 coloured green for in and rust for out, with the lot drawn sitting on it when
 one is there. Watching out-bays fill is watching backpressure arrive.
 
-The grey stations (`ohb_n`, `ohb_e`, `ohb_s`) are overhead hoist buffers. Their
-slots are neutral because a buffer has no direction — it is somewhere a finished
-lot can wait that is not another tool's port.
-
-Buffers are *not* what keeps the fab alive, though. That is `wip_cap` in the
-scenario: reentrant recipes will otherwise fill every port in the fab and
-deadlock it permanently, and no amount of storage prevents that — it only
-delays it. See `DESIGN.md` for the operating curve.
+What keeps the fab alive is `wip_cap` in the scenario. Reentrant recipes will
+otherwise fill every port in the fab and deadlock it permanently, and storage
+does not prevent that — buffers were built, measured, and removed once it was
+clear they only delayed it. See `DESIGN.md` for the operating curve.
 
 Four tabs alongside:
 
@@ -75,19 +83,22 @@ Four tabs alongside:
   *processing* or *done, no free out-port* — the second is a finished lot that
   cannot leave, which stalls the tool behind it, so it is called out rather than
   lumped in with work in progress.
-- **OHTs** — all eight vehicles, what each is doing, what it carries and where
+- **OHTs** — every vehicle, what each is doing, what it carries and where
   it is headed. Click one to draw its planned route, which is how a congestion
   detour becomes visible. Hovering a vehicle on the map shows the same. A lot
   names the vehicle carrying it and a vehicle names its lot, and both are links,
   so following one to the other does not mean hunting through the other tab.
 - **Tools** — utilisation (share of ticks with a lot in process) and queue
-  depth per machine. Source, sink and buffers show "—": nothing is ever *in
-  process* at any of them, so a percentage would read 100% and mean nothing.
-  Buffers show slots used instead, because a full buffer is one that can no
-  longer unblock anything.
+  depth per machine. The source shows "—": nothing is ever *in process* there,
+  so a percentage would read 100% and mean nothing. This is the fastest way to
+  find the bottleneck — on the fab map litho sits near 80% while implant sits
+  near 15%.
 - **Stats** — the cycle-time distribution as a histogram with p50 and p95
   marked, because two policies can agree on the mean and disagree completely on
-  the tail, plus the throughput counters.
+  the tail, plus the throughput counters. The histogram spans the observed
+  range rather than zero to worst: a fab whose lots all finish between 11k and
+  14k ticks would otherwise draw its whole distribution in the last fifth of
+  the axis.
 
 Vehicle states are named for what you can see rather than for the leg of the
 job: a vehicle is **fetching** while it drives empty toward a pickup and
@@ -102,8 +113,10 @@ ceiling-mounted, so they legitimately run over tools, and the sim ignores
 machine `w`/`h` entirely — they are presentational only.
 
 ```
-cargo run --release --bin sweep          # policy sensitivity, one knob at a time
+cargo run --release --bin sweep [ticks] [seeds]   # policy sensitivity
 ```
+
+`OHT_MAP`, `OHT_SCENARIO` and `OHT_VEHICLES` override what it sweeps.
 
 Prints how far each policy weight moves the fab against the seed-to-seed noise.
 Short version: at the shipped operating point, barely at all — see `DESIGN.md`.
@@ -137,18 +150,19 @@ it locally first:
 ```
 cargo test
 cargo run --release --bin headless -- \
-    maps/demo_loop.json scenarios/baseline.json policies/default.json 20000
+    maps/fab.json scenarios/fab.json policies/default.json 200000
 ```
 
 The runner validates the map first and exits non-zero with a problem list if
-it fails.
+it fails. The fab needs a long horizon to say anything: mean cycle time is
+around 12,000 ticks, so a 20,000-tick run is almost entirely fill transient.
 
 Pass a second policy file to compare two policies on an identical job stream:
 
 ```
 cargo run --release --bin headless -- \
-    maps/demo_loop.json scenarios/baseline.json \
-    policies/default.json 20000 policies/starvation_biased.json
+    maps/fab.json scenarios/fab.json \
+    policies/default.json 200000 policies/starvation_biased.json
 ```
 
 ## The track format
@@ -196,9 +210,9 @@ spurs, and the main line still strongly connected with every spur cell removed.
 `reference/gen_map2.py` has the original version of the same checks.
 
 **Arrival rate has to be set against the bottleneck.** litho at 2 tools x 2
-chambers / 120 ticks, visited twice per lot, caps the fab near 16.7 lots per
-1000 ticks. The first scenario released 45, so every policy looked identically
-terrible. The baseline now runs at 12.
+chambers / 120 ticks, visited twice per lot, caps the demo fab near 16.7 lots
+per 1000 ticks. The first scenario released 45, so every policy looked
+identically terrible. The demo baseline now runs at 12.
 
 **Prepositioning must not commit to a single spur.** Straight-line distance to
 a tool is a crude proxy on a directed track graph and ties are common on a
@@ -208,45 +222,55 @@ empty spur; the losers arrived to find it taken and re-decided from where they
 stood, which is the main line. Keeping the line clear outranks the starvation
 preference — see `DESIGN.md` for the full account.
 
-On 20 000 ticks:
+**The demo map was too small for the game to work.** Dispatch scores every
+(job, vehicle, destination) triple, but on the demo map the mean number of
+assignable vehicles was **0.24**, and when dispatch planned at all it ranked a
+mean of **2.3 candidates**. A weighted scoring function cannot express anything
+with one candidate, so the entire configuration space was inert: ten of twelve
+knobs moved throughput less than the seed-to-seed noise. That is what
+`maps/fab.json` is for. On it the same numbers are **14.6 assignable vehicles
+and 22.6 candidates per planning call**, with litho and the fleet both around
+71% busy. `DESIGN.md` has the full comparison.
 
-| | default | starvation_biased |
-|---|---|---|
-| lots created | 100 | 172 |
-| completed | 77 | 157 |
-| p95 cycle | 3191 | 2571 |
-| utilisation | 32% | 90% |
-| mean backlog | 6.52 | 3.78 |
-| deadlocks | 0 | 0 |
-| stuck recoveries | 45 | 0 |
+**The WIP cap is a cliff, not a slope.** At 30 vehicles the fab runs clean for
+a million ticks on twelve seeds at caps 28 through 34, and wedges permanently at
+36 — on one seed in six, at tick 13,294, during the fill transient. Nothing
+degrades on the way there; throughput rises with the cap right up to the edge.
+`wip_cap` ships at **32**, below the edge rather than at the throughput
+maximum, and `tests/integration.rs` runs six seeds through the fill transient so
+a retune cannot quietly land back on the cliff.
 
-`starvation_biased` currently dominates `default` on every axis, so the two
-shipped policies do not yet demonstrate a tradeoff. Both are also still
-source-limited rather than fleet-limited: the scenario offers ~240 lots over
-20 000 ticks and neither creates that many. Retuning them into a real tradeoff
-is the open question — see `DESIGN.md`.
+**Dispatch cost most of the tick, and did not have to.** On the fab map the
+simulation ran at 13.8k ticks/second, 88% of it inside `dispatch::plan`, which
+built one full-map distance field per idle vehicle plus one per pending pickup.
+Three changes took it to **50.7k** with identical behaviour: search *backwards*
+from each pickup so one pass serves every vehicle, do not expand states nothing
+can arrive in (most of the state space, on one-way track), and ask for delivery
+costs one target at a time instead of filling the map to read three cells of
+it. Same lots completed, same p95. A fourth — memoising futile plans — was
+tried and removed: worth 30x before those three and nothing after, and it never
+applied to a wedged fab anyway, because a wedged fab keeps assigning deliveries
+that fail rather than going quiet.
 
 ## Known rough edges
 
-- Stuck-vehicle recovery fires 45 times per 20k ticks under `default`, and not
-  at all under `starvation_biased`. That is 45 *events*, not 45 vehicles — the
-  demo map has 8, and one in a bad spot can trigger recovery repeatedly. Not
-  fatal — the vehicle reroutes and carries on — but the underlying stalls are
-  worth investigating rather than papering over with a bigger
-  `stuck_threshold`.
 - An idle vehicle can still end up on the main line when *every* spur is taken:
-  it has nowhere to go and stops where it stands. The demo map has exactly as
-  many spurs as vehicles, so there is no slack.
-- Resource deadlock (vehicles waiting on ports that will never free) has no
-  detector yet. Movement deadlock does. The distinction matters: a packed ring
-  all wanting to advance is a legal *rotation*, and a chain behind a hoisting
-  vehicle is a transient stall — neither is a deadlock, and `movement.rs` has
-  tests asserting they are not reported as one.
-- The delivery-cost term in dispatch seeds its distance field with an arbitrary
-  legal heading, so it can be off by one curve. Immaterial for ranking.
-- No buffers or stockers yet. Backpressure currently manifests as lots stuck
-  inside machines when output ports are full, which works but is coarser than
-  real under-track buffers.
+  it has nowhere to go, so it keeps circulating rather than stopping, which
+  costs track capacity. Both maps have exactly as many spurs as vehicles, so
+  there is no slack.
+- The delivery-cost term in dispatch seeds its search with an arbitrary legal
+  heading out of the pickup, so it can be off by one curve. Immaterial for
+  ranking.
+- Resource deadlock is detected and reported but never recovered from. That is
+  deliberate for now — a wedged fab is a legible failure state, and the WIP cap
+  is the control that avoids it — but it means a bad cap produces a run that
+  goes quiet rather than one that visibly degrades.
+- Tools have separate input and output ports. Real tools mostly have two to
+  four *bidirectional* load ports and the FOUP stays on the one it arrived at.
+  Modelling that would change where backpressure shows up.
+- The fab recipe is one 68-step flow with no batching, no changeover penalty,
+  no queue-time windows and no rework. Those are the mechanics still to land;
+  see `DESIGN.md`.
 
 ## The browser boundary
 

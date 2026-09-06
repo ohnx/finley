@@ -24,10 +24,17 @@ struct Run {
     deadlocks: u64,
 }
 
+fn env_or(key: &str, fallback: &str) -> String {
+    std::env::var(key).unwrap_or_else(|_| fallback.to_string())
+}
+
 fn run(policy: &Policy, ticks: u64, seed: u64) -> Run {
-    let map = load_map(&fs::read_to_string("maps/demo_loop.json").unwrap()).unwrap();
-    let mut scen =
-        load_scenario(&fs::read_to_string("scenarios/baseline.json").unwrap(), &map.grid).unwrap();
+    let map = load_map(&fs::read_to_string(env_or("OHT_MAP", "maps/fab.json")).unwrap()).unwrap();
+    let mut scen = load_scenario(
+        &fs::read_to_string(env_or("OHT_SCENARIO", "scenarios/fab.json")).unwrap(),
+        &map.grid,
+    )
+    .unwrap();
     scen.seed = seed;
     // Optional override, so the same sweep can be run at a different fleet size:
     // weights can only matter when dispatch has more than one way to assign the

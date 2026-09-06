@@ -290,11 +290,17 @@ arrival rate until the fleet is the binding constraint rather than the source.
   carrying weight, it should count only vehicles on a job.
 - ~~No resource-deadlock detector.~~ There is one now, and it found a real
   deadlock — see below.
-- ~~No buffers or stockers.~~ Three overhead hoist buffers on the demo map,
-  six slots. Still a good thing for the player to allocate: count and placement
-  are untuned, and they trade against the WIP cap rather than replacing it.
-- Dispatch's delivery-cost term seeds its distance field with an arbitrary legal
-  heading, so it can be off by one curve. Immaterial for ranking.
+- ~~No buffers or stockers.~~ Built, measured, and removed: at the shipped cap
+  they were neutral on throughput (2372 lots with, 2385 without), so they were
+  paying two transport moves where one would do. What they bought was tolerance
+  for a badly-set cap, which is not worth the model complexity while the cap is
+  the thing being tuned.
+- Dispatch's delivery-cost term seeds its search with an arbitrary legal heading
+  out of the pickup, so it can be off by one curve. Immaterial for ranking.
+- Resource deadlock is detected but never recovered from. Deliberate for now —
+  a wedged fab is a legible failure state and the cap is the control that avoids
+  it — but it does mean a bad cap produces a run that goes quiet rather than one
+  that visibly degrades.
 
 ## The deadlock that actually happened
 
@@ -324,7 +330,7 @@ at its cap is not released, and waits outside the line.
 
 ### The operating curve
 
-Sweeping the cap over 300 000 ticks, default policy:
+Sweeping the cap on the *demo* map over 300 000 ticks, default policy:
 
 | cap | completed | throughput | p95 cycle | mean WIP | deadlock |
 |---|---|---|---|---|---|
@@ -345,7 +351,8 @@ the ~28 where the fab dies.
 Capped at 16 the fab runs clean for **1 000 000 ticks** under both policies. The
 earlier claim that buffers fixed it rested on a 50 000-tick run, which was
 simply too short to see the failure — worth remembering before declaring this
-one fixed either.
+one fixed either. The fab map has the same curve with a sharper edge; see
+"The cap is a cliff" above.
 
 ### What buffers are actually for
 
@@ -391,6 +398,143 @@ Two lessons worth keeping. A fab with half a fleet still completes lots, so
 nothing failed loudly — there is now a test asserting every vehicle carries a
 job. And fleet size and WIP cap interact: they are two knobs on the same curve,
 and neither can be tuned alone.
+
+## The fab map
+
+The demo map was a nine-tool loop, and the section below on the weights explains
+why that was fatal to the premise: dispatch almost never had two candidates to
+choose between, so the configuration space was inert. `maps/fab.json` exists to
+fix that, and it is generated rather than drawn — `reference/gen_fab.py`.
+
+**Layout.** 31x17, a one-way Manhattan grid: a clockwise perimeter with interior
+aisles alternating direction, 247 track cells, 39 junctions. Twenty tools sit in
+a 4x5 arrangement of blocks, each block carrying one tool body, four load ports
+on the aisle above it, and a one-cell parking spur. Every tool gets **four**
+ports — two in, two out — because two was not enough: with one in-port and one
+out-port per tool the fab spent most of its time with dispatch unable to find a
+free destination, which is both slow to simulate and boring to watch.
+
+The generator places bodies against their own ports, and a body may overlap a
+spur but a port may not. `validate.rs` runs on the result: the first generated
+map passed the generator's own connectivity check and was rejected by the Rust
+validator for exit bits pointing off the edge of the grid, which is why there is
+now a test asserting both shipped maps validate.
+
+**The flow.** One recipe, 68 moves: deposition x16, litho x13, clean x13,
+etch x8, cmp x7, furnace x5, implant x5, and one visit to test. It is
+reentrant by construction — a lot returns to litho thirteen times — which is
+what makes the fab a circular-dependency machine and the WIP cap load-bearing.
+The tool mix is set against that: five litho tools at 108 ticks each, three
+deposition at 48, two each of etch/cmp/implant/clean, two furnaces at 288 ticks
+with capacity 4, and one test station.
+
+**The time scale.** One tick is **five seconds**, recorded as `tick_seconds` in
+the scenario. The core never reads it; it exists so the UI can put a duration
+next to a tick count. Five seconds is about one vehicle move, so movement stays
+legible at 1x, and process times are compressed roughly 5x from real ones —
+which puts the process-to-transport ratio around 1.8:1 rather than a real fab's
+~90:1. That compression is deliberate: at a realistic ratio the vehicles would
+be idle almost always and there would be nothing to watch. What matters for the
+premise is that the ratio is high enough for the fleet to have slack and low
+enough that transport still binds.
+
+**Where it lands.** 30 vehicles, cap 32, arrivals 4.0/1000. Litho and the fleet
+are both busy around 71%, mean cycle time is about 12,000 ticks (17 hours), and
+throughput is 2.56 lots per 1000 ticks — about 44 a day.
+
+And, the point of the exercise, dispatch now has candidates to rank. Measured
+inside `dispatch::plan` over 120,000 ticks:
+
+| | demo loop | fab, cap 32 |
+|---|---|---|
+| mean assignable vehicles (all ticks) | 0.24 | **14.60** |
+| ticks where dispatch plans at all | 6.7% | **24.6%** |
+| ticks where it ranks more than one candidate | 4.2% | **15.7%** |
+| mean candidates per planning call | 2.3 | **22.6** |
+
+Ten times the candidates and four times the frequency. The cap trades those
+against each other rather than simply raising them: a lower cap plans less often
+but ranks *more* candidates each time, because fewer lots in the fab means more
+free destination ports to choose between. Across caps 28 to 36 the share of
+ticks with a real choice only moves from 14.4% to 16.8%, while mean candidates
+per call moves from 32.1 down to 16.5.
+
+### The cap is a cliff
+
+Sweeping the cap over 1 000 000 ticks and twelve seeds:
+
+| cap | throughput /1k | p95 cycle | vehicles busy | seeds that wedged |
+|---|---|---|---|---|
+| 28 | 2.34 | 11,862 | 64.4% | 0/12 |
+| 30 | 2.46 | 12,105 | 68.0% | 0/12 |
+| **32** | **2.56** | **12,354** | **71.2%** | **0/12** |
+| 34 | 2.66 | 12,633 | 74.3% | 0/12 |
+| 36 | 2.75 | 12,949 | 77.0% | **2/12** |
+
+(Averaged over the seeds that survived; a wedged run completes nothing after it
+dies, so including it would mix two different questions.)
+
+Nothing degrades on the approach — throughput rises monotonically right up to
+the edge, and one of the two seeds that die at 36 dies at tick 13,294, during
+the fill transient, then stays wedged for the remaining 986,707 ticks. This is
+the same failure the demo map had, and it is why a cap tuned on one seed is a
+cap tuned on one coin flip: at 36 the fab looked clean on the shipped seed for a
+million ticks, and it was the *sweep's* noise figure that gave it away — a
+seed-to-seed spread of ±1.34 on a mean of 1.79 is not noise, it is one run in
+three having died.
+
+Two consequences. `wip_cap` ships below the edge with margin rather than at the
+throughput maximum. And `tests/integration.rs` runs six seeds through the fill
+transient, because that is the window where the failure lives and it is cheap to
+cover.
+
+### Making dispatch affordable
+
+The fab map ran at 13.8k ticks/second, and profiling said 88% of the tick was
+inside `dispatch::plan`. It was building one full-map distance field per idle
+vehicle plus one per pending pickup — around fourteen Dijkstras a planning tick,
+to read a few dozen numbers out of them.
+
+Three changes, in order of what they bought:
+
+1. **Search backwards from the pickup, not forwards from each vehicle.** The
+   per-vehicle term dispatch needs is "what does it cost this vehicle to reach
+   that pickup", and a WIP-capped fab runs at roughly two pending jobs and a
+   dozen free vehicles. One reversed search per pickup answers it for all of
+   them. The field is indexed by `(cell, heading)` state rather than collapsed
+   per cell, because a vehicle has a definite heading and a per-cell minimum
+   would hand it the cost of a turn it cannot make.
+2. **Do not expand states nothing can arrive in.** A reversed search relaxes
+   into every `(cell, heading)` pair, but on one-way track most of those are
+   states no cell steps into — sinks in the reversed graph. Recording their cost
+   without putting them on the heap cut the search's state space about fourfold
+   and was the single biggest win.
+3. **Ask for delivery costs one target at a time.** The forward field from a
+   pickup was only ever read at the free in-ports of the tools that run the next
+   step — a handful of cells. A search that stops when it reaches its target is
+   an order of magnitude cheaper than one that fills the map.
+
+**13.8k to 50.7k ticks/second**, with the same lots completed and the same p95.
+The router also caches `Grid::step` and its inverse as flat tables at
+construction, so the searches no longer pay two divisions per edge; the grid is
+fixed for the life of a `Router`, which an editor will have to respect by
+building a new one.
+
+A fourth change was tried and **removed**: memoising "this exact situation
+already produced an empty plan, so do not replan". It was worth 30x before the
+three above, and nothing at all after them — 0.2% of planning ticks skipped, no
+measurable difference either way. Worse, it did not help the case it was written
+for. A wedged fab does not stop assigning: dispatch keeps sending vehicles to
+collect lots whose destination fills before they arrive, so the plan is
+non-empty every tick and the memo never applies. That is worth knowing about the
+deadlock independently of the optimisation — it is a livelock, not a stall,
+which is why the fab still looks busy on the map after it has died.
+
+A correctness note, since a reversed Dijkstra is easy to get subtly wrong: it
+was cross-checked against the forward field over 7200 `(start, heading, target)`
+triples with non-uniform congestion, and agreed to 3.2e-7 relative — float
+rounding, since the two sum the same path in opposite orders. That rounding does
+flip the occasional scoring tie, so metrics move in the last digit.
 
 ## Do the weights actually do anything?
 
@@ -439,12 +583,24 @@ also where the fab turns chaotic: the seed-to-seed spread goes from ±0.03 to
 **±2.69**, as large as the effects themselves, so the bigger swings there are
 the job stream rather than the policy.
 
-So the configuration space is currently inert, and the game premise does not yet
-hold on this map. The fix is not a policy change: the loop is too small for a
-fleet with slack in it, so there is never a decision worth making. A larger map
-with more track per vehicle would give dispatch real choices without tipping
-into congestion collapse — that is now the most interesting thing to try, and it
-is a level-editor question rather than a tuning one.
+So the configuration space is inert on the demo map, and the game premise does
+not hold there. The fix was not a policy change: the loop is too small for a
+fleet with slack in it, so there is never a decision worth making.
+
+**That is what `maps/fab.json` is for.** On it, at 30 vehicles and the shipped
+cap, the mean number of assignable vehicles is **14.60** and dispatch ranks a
+mean of **22.6 candidates** whenever it plans — ten times the demo map, with
+litho and the fleet both busy around 71%. See the table above. The numbers that
+made the premise fail are the ones the new map was designed against, and there
+is a test asserting them so a scenario edit cannot quietly undo it.
+
+Whether the *weights* now earn their keep on that map is the next thing to
+measure, and it needs care: the fab's mean cycle time is around 12,000 ticks, so
+a sweep short enough to be cheap is mostly fill transient, and the first attempt
+reported a seed-to-seed spread of ±1.34 on a mean of 1.79 — which turned out not
+to be noise at all, but one seed of three hitting the WIP cliff. Sweeping the
+fab means sweeping at a horizon well past the transient, and reading the
+deadlock column before the throughput column.
 
 `idle.dwell_before_move` deserves a note: it is not dead code, it is dead under
 `NearestPark`. A parked vehicle's own spur is always among its targets, so it
@@ -453,21 +609,39 @@ never decides to move and the dwell timer never gates anything. Under
 
 ## Open questions
 
-1. **Retune the shipped policies so they show a tradeoff again** (see above).
-   This is the one that decides whether the game premise holds up, and the UI
-   now makes it possible to watch what each policy actually does.
-2. ~~Buffers and stockers, and a resource-deadlock detector.~~ Done, along with
-   the WIP cap that is the actual fix. Cap, buffer count and buffer placement
-   are all untuned and all trade against each other — exactly the sort of thing
-   the player should be deciding.
-3. Bidirectional load ports, to match real tools (see above). A model change,
+1. **Run the sensitivity sweep on the fab map**, at a horizon past the fill
+   transient. The demo map's answer ("the weights barely matter") was a
+   property of that map, and the fab map was built specifically to invalidate
+   it. Until this is measured, the premise is argued rather than demonstrated.
+2. **Retune the shipped policies so they show a tradeoff.** On the demo map
+   `starvation_biased` dominates `default` on every axis, which means the two
+   presets do not illustrate a choice. Depends on (1).
+3. **The four fab mechanics that are specified but not built**, each of which
+   turns a scheduling question into a real one:
+   - batch furnace — hold N lots, run when full or when a timer expires, so
+     waiting for a fuller batch trades cycle time against tool time;
+   - implant changeover — a setup penalty when the recipe species changes, so
+     grouping like-with-like has value;
+   - clean queue-time windows — a lot that misses its window after clean is
+     **scrapped**, tracked as a yield metric, which makes clean-to-furnace
+     sequencing a hard constraint rather than a preference;
+   - litho rework — a probabilistic failure sends the lot back through clean
+     and around litho again, which is reentrancy with a stochastic edge.
+4. ~~Buffers and stockers, and a resource-deadlock detector.~~ Detector done;
+   the WIP cap is the actual fix and buffers were removed once measurement
+   showed they only delayed the failure.
+5. Bidirectional load ports, to match real tools (see above). A model change,
    not a fix — the deadlock is already handled.
-4. Policy editing in the UI. The weights *are* the game; exposing them as live
+6. Policy editing in the UI. The weights *are* the game; exposing them as live
    sliders is the obvious next step, and needs the policy struct crossing the
-   FFI boundary rather than only the config JSON.
-5. An isometric renderer, over the same snapshot data the top-down one uses.
-6. A map editor. `validate.rs` exists so that it can surface `Problem::cell` as
-   a highlight rather than letting people draw fabs that strand vehicles.
+   FFI boundary rather than only the config JSON. `oht_set_policy` is already
+   there for it.
+7. An isometric renderer, over the same snapshot data the top-down one uses.
+8. A map editor. `validate.rs` exists so that it can surface `Problem::cell` as
+   a highlight rather than letting people draw fabs that strand vehicles, and
+   `oht_validate_map` checks a document without building a world from it.
+   Note that `Router` caches the grid's adjacency at construction, so an edit
+   must build a new one.
 
 ## Validating changes
 

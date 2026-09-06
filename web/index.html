@@ -14,7 +14,7 @@
     <p id="mapname">loading…</p>
   </div>
   <div class="controls">
-    <div class="tick"><b id="tickval">0</b><span>tick</span></div>
+    <div class="tick"><b id="tickval">0</b><span id="tickclock">tick</span></div>
     <div class="group">
       <button id="play" class="primary">Pause</button>
       <button id="step">Step</button>
@@ -24,6 +24,13 @@
       <span>Speed</span>
       <input id="speed" type="range" min="0" max="7" step="1" value="3">
       <b id="speedlabel">4×</b>
+    </label>
+    <label class="inline">
+      <span>Fab</span>
+      <select id="scene">
+        <option value="fab">fab (20 tools)</option>
+        <option value="demo_loop">demo loop (9 tools)</option>
+      </select>
     </label>
     <label class="inline">
       <span>Policy</span>

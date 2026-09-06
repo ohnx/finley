@@ -277,7 +277,7 @@ impl World {
 
             // Starvation signal.
             let m = &self.machines[m_id];
-            let starved = m.in_process.is_empty() && !m.is_sink();
+            let starved = m.in_process.is_empty() && !m.is_terminal();
             let decay = 0.99f32;
             let s = m.starvation * decay + if starved { 1.0 - decay } else { 0.0 };
             self.machines[m_id].starvation = s;

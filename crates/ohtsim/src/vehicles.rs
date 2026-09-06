@@ -54,7 +54,6 @@ impl World {
                     let dest_cell = self.machines[dest.0].ports[dest.1].cell;
                     let prof = &self.policy.profiles[self.active_profile];
                     let path = self.router.route(
-                        &self.grid,
                         &self.congestion,
                         &prof.route,
                         self.vehicles[v].cell,
@@ -169,7 +168,7 @@ impl World {
                 // machine in map order instead of the first.
                 let mut hungriest: Option<MachineId> = None;
                 for (i, m) in self.machines.iter().enumerate() {
-                    if m.is_source() || m.is_sink() {
+                    if m.is_source() || m.is_terminal() {
                         continue;
                     }
                     let better = match hungriest {
@@ -232,13 +231,12 @@ impl World {
         let (cell, heading) = (self.vehicles[v].cell, self.vehicles[v].heading);
         let route = self
             .router
-            .route(&self.grid, &self.congestion, &prof, cell, heading, &targets)
+            .route(&self.congestion, &prof, cell, heading, &targets)
             .or_else(|| {
                 if targets.len() == free_parking.len() {
                     None
                 } else {
                     self.router.route(
-                        &self.grid,
                         &self.congestion,
                         &prof,
                         cell,
@@ -375,7 +373,6 @@ impl World {
     fn reroute(&mut self, v: VehicleId, target: CellId) {
         let prof = &self.policy.profiles[self.active_profile];
         if let Some(r) = self.router.route(
-            &self.grid,
             &self.congestion,
             &prof.route,
             self.vehicles[v].cell,

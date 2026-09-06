@@ -94,10 +94,13 @@ impl Machine {
         self.kind == "source"
     }
 
-    pub fn is_sink(&self) -> bool {
-        self.kind == "sink"
+    /// Nothing leaves a terminal tool: a lot that finishes there is done. The
+    /// demo map calls it a sink, the fab flow ends at test; either way it can
+    /// never be starved of downstream work, and prepositioning vehicles near it
+    /// is pointless.
+    pub fn is_terminal(&self) -> bool {
+        self.kind == "sink" || self.kind == "test"
     }
-
 }
 
 // ---------------------------------------------------------------------------

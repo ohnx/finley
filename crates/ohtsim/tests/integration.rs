@@ -1,4 +1,4 @@
-//! End-to-end tests against the demo map.
+//! End-to-end tests against the shipped maps.
 //!
 //! The unit tests in `src/movement.rs` cover the resolver in isolation. These
 //! cover the properties that only show up once the whole tick loop runs, and
@@ -14,12 +14,24 @@ use ohtsim::{load_map, load_policy, load_scenario, MapConfig, Policy, ScenarioCo
 /// they are project content shared with the web UI, not test fixtures.
 const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
 
-fn fixtures(policy: &str) -> (MapConfig, ScenarioConfig, Policy) {
-    let read = |rel: String| fs::read_to_string(format!("{ROOT}/{rel}")).unwrap();
-    let map = load_map(&read("maps/demo_loop.json".into())).unwrap();
-    let scen = load_scenario(&read("scenarios/baseline.json".into()), &map.grid).unwrap();
-    let pol = load_policy(&read(format!("policies/{policy}.json"))).unwrap();
+/// A scenario is written against one map, so the pair travels together. Same
+/// pairs the UI's fab picker offers.
+const DEMO: (&str, &str) = ("maps/demo_loop.json", "scenarios/baseline.json");
+const FAB: (&str, &str) = ("maps/fab.json", "scenarios/fab.json");
+
+fn read(rel: &str) -> String {
+    fs::read_to_string(format!("{ROOT}/{rel}")).unwrap()
+}
+
+fn fixtures_of(scene: (&str, &str), policy: &str) -> (MapConfig, ScenarioConfig, Policy) {
+    let map = load_map(&read(scene.0)).unwrap();
+    let scen = load_scenario(&read(scene.1), &map.grid).unwrap();
+    let pol = load_policy(&read(&format!("policies/{policy}.json"))).unwrap();
     (map, scen, pol)
+}
+
+fn fixtures(policy: &str) -> (MapConfig, ScenarioConfig, Policy) {
+    fixtures_of(DEMO, policy)
 }
 
 fn world(policy: &str) -> World {
@@ -274,5 +286,114 @@ fn work_is_spread_across_the_fleet() {
     assert!(
         lo * 3 >= hi,
         "fleet load is lopsided: busiest vehicle {hi} ticks, least busy {lo} ({busy:?})"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The fab map
+// ---------------------------------------------------------------------------
+
+/// The generated map has to satisfy the same rules a hand-drawn one does.
+///
+/// `reference/gen_fab.py` has its own checks, and they passed on a map this
+/// validator rejected: the generator left exit bits pointing off the edge of
+/// the grid, which its own connectivity check never looked at. Generated
+/// content is not exempt from validation, it is exactly what needs it.
+#[test]
+fn the_shipped_maps_validate() {
+    for scene in [DEMO, FAB] {
+        let map = load_map(&read(scene.0)).unwrap();
+        let problems = ohtsim::validate(&map);
+        assert!(
+            problems.is_empty(),
+            "{}: {}",
+            scene.0,
+            problems
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
+}
+
+/// The fab's WIP cap has to hold across job streams, not just the shipped seed.
+///
+/// The cap is a cliff, not a slope. At 36 the fab ran clean for a million ticks
+/// on five seeds out of six and wedged permanently on the sixth -- at tick
+/// 13,294, during the fill transient, which is when the reentrant flow is most
+/// able to close a circular port dependency. A cap tuned on one seed is a cap
+/// tuned on one coin flip, so this runs several and covers the transient.
+#[test]
+fn the_fab_cap_survives_its_fill_transient() {
+    // Comfortably past the fill: the fab reaches its cap around 5k and the
+    // known failure lands at 13k.
+    const HORIZON: u64 = 40_000;
+
+    for i in 0..6u64 {
+        let (map, mut scen, pol) = fixtures_of(FAB, "default");
+        let cap = scen.wip_cap;
+        scen.seed = 20260903 + i * 7919;
+        let seed = scen.seed;
+        let mut w = World::new(map, scen, pol);
+        w.run(HORIZON);
+        assert_eq!(
+            w.metrics.resource_deadlock_events, 0,
+            "seed {seed} deadlocked at the shipped cap of {cap} ({} ticks stuck)",
+            w.metrics.resource_deadlock_ticks
+        );
+        assert!(
+            w.metrics.lots_completed > 0,
+            "seed {seed} completed nothing in {HORIZON} ticks"
+        );
+    }
+}
+
+/// The reason the fab map exists: dispatch has to have something to choose
+/// between.
+///
+/// On the demo map the mean number of assignable vehicles was 0.24 and dispatch
+/// ranked a mean of 2.3 candidates when it planned at all. A weighted scoring
+/// function cannot express anything with one candidate, so the whole
+/// configuration space was inert -- ten of twelve knobs moved throughput less
+/// than the seed-to-seed noise. Asserting it here because it is a property of
+/// the map and the scenario together, and either can be edited back into
+/// inertness without anything else failing.
+///
+/// Both numbers below are sampled after the tick, so both are lower bounds:
+/// dispatch runs inside the tick, and the work it managed to assign is gone by
+/// the time this looks. The second one is a weak signal for that reason -- the
+/// fab measures 15.3% against the demo map's 2.4% -- and the first is the
+/// telling one: 14.6 assignable vehicles against 0.24.
+#[test]
+fn the_fab_gives_dispatch_a_real_choice() {
+    const HORIZON: u64 = 60_000;
+
+    let (map, scen, pol) = fixtures_of(FAB, "default");
+    let mut w = World::new(map, scen, pol);
+    let (mut idle_sum, mut choice) = (0u64, 0u64);
+    for _ in 0..HORIZON {
+        w.tick();
+        let idle = w
+            .vehicles
+            .iter()
+            .filter(|v| v.is_idle() || v.state == VehState::Repositioning)
+            .count() as u64;
+        idle_sum += idle;
+        if idle > 1 && w.pending_len() > 1 {
+            choice += 1;
+        }
+    }
+    let mean_idle = idle_sum as f64 / HORIZON as f64;
+    let choice_pct = choice as f64 / HORIZON as f64 * 100.0;
+    assert!(
+        mean_idle > 5.0,
+        "only {mean_idle:.2} assignable vehicles on average; dispatch has \
+         nothing to pick from"
+    );
+    assert!(
+        choice_pct > 10.0,
+        "leftover work and free vehicles coincide on only {choice_pct:.1}% of \
+         ticks; the fab measures 15.3% and the demo map 2.4%"
     );
 }

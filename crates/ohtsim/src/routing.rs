@@ -56,6 +56,7 @@ const NO_SPUR: u32 = u32::MAX;
 
 pub struct Router {
     n_states: usize,
+    n_cells: usize,
     dist: Vec<f32>,
     prev: Vec<usize>,
     heap: BinaryHeap<Node>,
@@ -68,10 +69,27 @@ pub struct Router {
     spur: Vec<u32>,
     /// Track neighbours of each cell, either direction, for grouping spurs.
     neighbours: Vec<Vec<CellId>>,
+    /// `succ[cell * 4 + d]` is the cell reached by leaving `cell` heading `d`,
+    /// or `NO_CELL`. `pred` is the same table inverted. Both are `Grid::step`
+    /// answers cached at construction: the search asks that question a few
+    /// thousand times per call and it costs two divisions each time. The grid
+    /// is fixed for the life of a Router, so an edited map needs a new one.
+    succ: Vec<CellId>,
+    pred: Vec<CellId>,
 }
+
+/// Sentinel for "no such cell" in the `succ`/`pred` tables.
+const NO_CELL: CellId = usize::MAX;
 
 fn state_of(cell: CellId, d: Dir) -> usize {
     cell * 4 + d.index()
+}
+
+/// Index of the `(cell, heading)` state in a field returned by
+/// [`Router::rev_dist_field`]. Public because dispatch holds those fields and
+/// looks vehicles up in them by their exact heading, not by cell alone.
+pub fn state_index(cell: CellId, d: Dir) -> usize {
+    state_of(cell, d)
 }
 
 fn cell_of(state: usize) -> CellId {
@@ -80,6 +98,23 @@ fn cell_of(state: usize) -> CellId {
 
 fn dir_of(state: usize) -> Dir {
     Dir::from_index(state % 4)
+}
+
+/// Cost of every arrival/departure direction pair, indexed `from * 4 + to`.
+/// Negative marks the reversal that no monorail can make. Built once per
+/// search rather than matched per edge.
+fn step_costs(w: &RouteWeights) -> [f32; 16] {
+    let mut t = [-1.0f32; 16];
+    for from in ALL_DIRS {
+        for to in ALL_DIRS {
+            t[from.index() * 4 + to.index()] = match manoeuvre(from, to) {
+                Manoeuvre::Straight => w.length,
+                Manoeuvre::Curve => w.length + w.curve,
+                Manoeuvre::Reverse => continue,
+            };
+        }
+    }
+    t
 }
 
 pub struct RouteResult {
@@ -93,6 +128,7 @@ impl Router {
         let n = grid.len() * 4;
         Router {
             n_states: n,
+            n_cells: grid.len(),
             dist: vec![f32::INFINITY; n],
             prev: vec![usize::MAX; n],
             heap: BinaryHeap::new(),
@@ -107,6 +143,28 @@ impl Router {
                     }
                 }
                 adj
+            },
+            succ: {
+                let mut t = vec![NO_CELL; n];
+                for c in 0..grid.len() {
+                    for d in ALL_DIRS {
+                        if let Some(next) = grid.step(c, d) {
+                            t[c * 4 + d.index()] = next;
+                        }
+                    }
+                }
+                t
+            },
+            pred: {
+                let mut t = vec![NO_CELL; n];
+                for c in 0..grid.len() {
+                    for d in ALL_DIRS {
+                        if let Some(next) = grid.step(c, d) {
+                            t[next * 4 + d.index()] = c;
+                        }
+                    }
+                }
+                t
             },
         }
     }
@@ -168,7 +226,6 @@ impl Router {
     /// `targets`. Reusing one Router across calls avoids reallocating.
     pub fn route(
         &mut self,
-        grid: &Grid,
         congestion: &[f32],
         w: &RouteWeights,
         start: CellId,
@@ -194,11 +251,10 @@ impl Router {
             });
         }
 
-        for i in 0..self.n_states {
-            self.dist[i] = f32::INFINITY;
-            self.prev[i] = usize::MAX;
-        }
+        self.dist.fill(f32::INFINITY);
+        self.prev.fill(usize::MAX);
         self.heap.clear();
+        let costs = step_costs(w);
 
         let s0 = state_of(start, heading);
         self.dist[s0] = 0.0;
@@ -218,25 +274,24 @@ impl Router {
                 goal = Some(state);
                 break;
             }
-            let from_dir = dir_of(state);
-            for d in ALL_DIRS {
-                let next = match grid.step(cell, d) {
-                    Some(n) => n,
-                    None => continue,
-                };
+            let from_dir = dir_of(state).index();
+            for d in 0..4 {
+                let next = self.succ[cell * 4 + d];
+                if next == NO_CELL {
+                    continue;
+                }
                 if !self.passable(cell, next, target_spur) {
                     continue;
                 }
-                let step_cost = match manoeuvre(from_dir, d) {
-                    Manoeuvre::Straight => w.length,
-                    Manoeuvre::Curve => w.length + w.curve,
-                    // Reversing is impossible on a monorail; the track bitmask
-                    // should already forbid it, but guard anyway.
-                    Manoeuvre::Reverse => continue,
-                };
+                let step_cost = costs[from_dir * 4 + d];
+                // Reversing is impossible on a monorail; the track bitmask
+                // should already forbid it, but guard anyway.
+                if step_cost < 0.0 {
+                    continue;
+                }
                 let cong = congestion.get(next).copied().unwrap_or(0.0);
                 let total = cost.0 + step_cost + w.congestion * cong;
-                let ns = state_of(next, d);
+                let ns = next * 4 + d;
                 if total < self.dist[ns] {
                     self.dist[ns] = total;
                     self.prev[ns] = state;
@@ -267,14 +322,13 @@ impl Router {
     /// Route cost only. Used for scoring candidates without keeping the path.
     pub fn cost_to(
         &mut self,
-        grid: &Grid,
         congestion: &[f32],
         w: &RouteWeights,
         start: CellId,
         heading: Dir,
         target: CellId,
     ) -> Option<f32> {
-        self.route(grid, congestion, w, start, heading, &[target])
+        self.route(congestion, w, start, heading, &[target])
             .map(|r| r.cost)
     }
 
@@ -285,17 +339,15 @@ impl Router {
     /// field per vehicle turns those into array lookups.
     pub fn dist_field(
         &mut self,
-        grid: &Grid,
         congestion: &[f32],
         w: &RouteWeights,
         start: CellId,
         heading: Dir,
     ) -> Vec<f32> {
-        for i in 0..self.n_states {
-            self.dist[i] = f32::INFINITY;
-            self.prev[i] = usize::MAX;
-        }
+        // `prev` is not read here, so it is not reset either.
+        self.dist.fill(f32::INFINITY);
         self.heap.clear();
+        let costs = step_costs(w);
 
         let s0 = state_of(start, heading);
         self.dist[s0] = 0.0;
@@ -309,29 +361,27 @@ impl Router {
                 continue;
             }
             let cell = cell_of(state);
-            let from_dir = dir_of(state);
-            for d in ALL_DIRS {
-                let next = match grid.step(cell, d) {
-                    Some(n) => n,
-                    None => continue,
-                };
+            let from_dir = dir_of(state).index();
+            for d in 0..4 {
+                let next = self.succ[cell * 4 + d];
+                if next == NO_CELL {
+                    continue;
+                }
                 // No targets here: a distance field is to everywhere. Steps
                 // out of a spur are allowed so a parked vehicle has finite
                 // costs; steps into one are not, since nothing routes through.
                 if !self.passable(cell, next, NO_SPUR) {
                     continue;
                 }
-                let step_cost = match manoeuvre(from_dir, d) {
-                    Manoeuvre::Straight => w.length,
-                    Manoeuvre::Curve => w.length + w.curve,
-                    Manoeuvre::Reverse => continue,
-                };
+                let step_cost = costs[from_dir * 4 + d];
+                if step_cost < 0.0 {
+                    continue;
+                }
                 let cong = congestion.get(next).copied().unwrap_or(0.0);
                 let total = cost.0 + step_cost + w.congestion * cong;
-                let ns = state_of(next, d);
+                let ns = next * 4 + d;
                 if total < self.dist[ns] {
                     self.dist[ns] = total;
-                    self.prev[ns] = state;
                     self.heap.push(Node {
                         cost: Cost(total),
                         state: ns,
@@ -341,7 +391,7 @@ impl Router {
         }
 
         // Collapse the (cell, heading) states down to per-cell minima.
-        let mut field = vec![f32::INFINITY; grid.len()];
+        let mut field = vec![f32::INFINITY; self.n_cells];
         for s in 0..self.n_states {
             let c = cell_of(s);
             if self.dist[s] < field[c] {
@@ -349,5 +399,81 @@ impl Router {
             }
         }
         field
+    }
+
+    /// Cost to reach `target` *from* every `(cell, heading)` state, in one pass.
+    ///
+    /// The mirror image of `dist_field`, searching the same edges backwards.
+    /// Dispatch needs the cost from each idle vehicle to each pickup, and there
+    /// are usually many more idle vehicles than distinct pickups -- a WIP-capped
+    /// fab runs at roughly one pending job and a dozen free vehicles -- so one
+    /// backwards search per pickup replaces one forwards search per vehicle.
+    ///
+    /// Indexed by state rather than by cell: a vehicle has a definite heading,
+    /// and collapsing to a per-cell minimum here would quietly hand it the cost
+    /// of a turn it cannot make.
+    pub fn rev_dist_field(
+        &mut self,
+        congestion: &[f32],
+        w: &RouteWeights,
+        target: CellId,
+    ) -> Vec<f32> {
+        self.dist.fill(f32::INFINITY);
+        self.heap.clear();
+        let costs = step_costs(w);
+
+        // Arrival heading at the target is free to choose, so every state on
+        // the target cell is a source.
+        for d in ALL_DIRS {
+            let s = state_of(target, d);
+            self.dist[s] = 0.0;
+            self.heap.push(Node {
+                cost: Cost(0.0),
+                state: s,
+            });
+        }
+
+        while let Some(Node { cost, state }) = self.heap.pop() {
+            if cost.0 > self.dist[state] {
+                continue;
+            }
+            // `state` was arrived at by stepping into `next` heading `d`, so
+            // its predecessors all sit on the one cell that step came from.
+            let next = cell_of(state);
+            let d = state % 4;
+            let cell = self.pred[next * 4 + d];
+            if cell == NO_CELL {
+                continue;
+            }
+            if !self.passable(cell, next, NO_SPUR) {
+                continue;
+            }
+            let cong = congestion.get(next).copied().unwrap_or(0.0);
+            for from_dir in 0..4 {
+                let step_cost = costs[from_dir * 4 + d];
+                if step_cost < 0.0 {
+                    continue;
+                }
+                let total = cost.0 + step_cost + w.congestion * cong;
+                let ps = cell * 4 + from_dir;
+                if total < self.dist[ps] {
+                    self.dist[ps] = total;
+                    // A state nothing can arrive in is a dead end backwards:
+                    // its cost is worth recording, since a vehicle may be
+                    // sitting in it, but expanding it would find nothing. Most
+                    // of the state space is like this on one-way track, and
+                    // keeping it off the heap is most of what makes the
+                    // backwards search cheaper than the forwards one.
+                    if self.pred[ps] != NO_CELL {
+                        self.heap.push(Node {
+                            cost: Cost(total),
+                            state: ps,
+                        });
+                    }
+                }
+            }
+        }
+
+        self.dist.clone()
     }
 }

@@ -1,5 +1,6 @@
 {
   "seed": 20260903,
+  "tick_seconds": 5,
   "vehicles": 5,
   "arrival_per_1000": 12.0,
   "wip_cap": 16,

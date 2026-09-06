@@ -9,7 +9,7 @@ use crate::geom::{Grid, ALL_DIRS};
 use crate::metrics::Metrics;
 use crate::model::{Job, JobId, Lot, Machine, MachineId, PortId, PortKind, Vehicle, VehicleId};
 use crate::policy::{DispatchWeights, RouteWeights};
-use crate::routing::Router;
+use crate::routing::{state_index, Router};
 
 #[derive(Clone, Debug)]
 pub struct Assignment {
@@ -56,31 +56,28 @@ pub fn plan(
         return Vec::new();
     }
 
-    // One distance field per idle vehicle: cost from that vehicle to any cell.
-    let mut veh_field: Vec<(VehicleId, Vec<f32>)> = Vec::with_capacity(idle.len());
-    for &v in &idle {
-        let veh = &vehicles[v];
-        let f = router.dist_field(grid, congestion, rw, veh.cell, veh.heading);
-        veh_field.push((v, f));
+    // One distance field per distinct pickup cell, searched backwards: a single
+    // pass then gives every idle vehicle's cost to reach that pickup. A
+    // WIP-capped fab runs at a couple of pending jobs and a dozen free
+    // vehicles, so this is one search where a field per vehicle was a dozen.
+    struct Pickup {
+        cell: usize,
+        /// Indexed by `(cell, heading)` state rather than by cell: a vehicle
+        /// has a definite heading, and a per-cell minimum would quietly hand it
+        /// the cost of a turn it cannot make.
+        approach: Vec<f32>,
     }
-
-    // One distance field per distinct pickup cell: cost onward to any
-    // destination. Seeded with an arbitrary legal heading, so the delivery cost
-    // may be off by at most one curve — immaterial for ranking.
-    let mut pickup_fields: Vec<(usize, Vec<f32>)> = Vec::new();
+    let mut pickup_fields: Vec<Pickup> = Vec::new();
     for &jid in pending {
         let job = &jobs[jid];
         let cell = machines[job.from.0].ports[job.from.1].cell;
-        if pickup_fields.iter().any(|(c, _)| *c == cell) {
+        if pickup_fields.iter().any(|p| p.cell == cell) {
             continue;
         }
-        let heading = grid
-            .exits(cell)
-            .first()
-            .map(|(d, _)| *d)
-            .unwrap_or(ALL_DIRS[0]);
-        let f = router.dist_field(grid, congestion, rw, cell, heading);
-        pickup_fields.push((cell, f));
+        pickup_fields.push(Pickup {
+            cell,
+            approach: router.rev_dist_field(congestion, rw, cell),
+        });
     }
 
     let mut candidates: Vec<Candidate> = Vec::new();
@@ -95,10 +92,24 @@ pub fn plan(
             None => continue, // finished; should already be Done
         };
 
-        let deliver_field = match pickup_fields.iter().find(|(c, _)| *c == pickup_cell) {
-            Some((_, f)) => f,
+        let approach = match pickup_fields.iter().find(|p| p.cell == pickup_cell) {
+            Some(p) => &p.approach,
             None => continue,
         };
+        // Delivery cost is wanted at a handful of cells -- the free input ports
+        // of the tools that run this step -- so it is asked for one target at a
+        // time. A search that stops when it reaches its target is an order of
+        // magnitude cheaper than one that fills the map, and filling the map to
+        // read three cells of it was most of what dispatch cost.
+        //
+        // Seeded with an arbitrary legal heading out of the pickup, so a
+        // delivery cost may be off by at most one curve -- immaterial for
+        // ranking.
+        let deliver_heading = grid
+            .exits(pickup_cell)
+            .first()
+            .map(|(d, _)| *d)
+            .unwrap_or(ALL_DIRS[0]);
 
         // Terms independent of vehicle and destination.
         let wait = lot.wait_ticks(now) as f32;
@@ -115,24 +126,26 @@ pub fn plan(
                 None => continue,
             };
             let dest_cell = m.ports[port].cell;
-            let deliver_cost = deliver_field[dest_cell];
-            if !deliver_cost.is_finite() {
-                continue;
-            }
+            let deliver_cost =
+                match router.cost_to(congestion, rw, pickup_cell, deliver_heading, dest_cell) {
+                    Some(c) => c,
+                    None => continue,
+                };
 
             let dest_term = -dw.dest_starvation * m.starvation
                 + dw.dest_queue * m.load() as f32
                 + dw.dest_congestion * deliver_cost;
 
-            for (v, field) in &veh_field {
-                let pickup_cost = field[pickup_cell];
+            for &v in &idle {
+                let veh = &vehicles[v];
+                let pickup_cost = approach[state_index(veh.cell, veh.heading)];
                 if !pickup_cost.is_finite() {
                     continue;
                 }
                 let score = dw.travel_to_pickup * pickup_cost + lot_term + dest_term;
                 candidates.push(Candidate {
                     score,
-                    vehicle: *v,
+                    vehicle: v,
                     job: jid,
                     slot,
                     dest: (m_id, port),
@@ -170,7 +183,6 @@ pub fn plan(
         let veh = &vehicles[c.vehicle];
         let pickup_cell = machines[jobs[c.job].from.0].ports[jobs[c.job].from.1].cell;
         let path = match router.route(
-            grid,
             congestion,
             rw,
             veh.cell,

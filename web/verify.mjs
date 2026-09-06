@@ -13,12 +13,22 @@ import { fileURLToPath } from "url";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-// From: cargo run --release --bin headless -- maps/demo_loop.json \
-//           scenarios/baseline.json policies/<name>.json 20000
-const EXPECTED = {
-  default:           { created: 177, completed: 164, p95: 2210, stuck: 0 },
-  starvation_biased: { created: 170, completed: 156, p95: 2249, stuck: 0 },
-};
+// From: cargo run --release --bin headless -- <map> <scenario> <policy> <ticks>
+//
+// The fab case runs long on purpose. Mean cycle time there is around 12,000
+// ticks, so a short run compares two fabs that are both still filling up and
+// would agree even if steady-state behaviour had diverged.
+const CASES = [
+  { name: "demo/default", map: "maps/demo_loop.json",
+    scenario: "scenarios/baseline.json", policy: "default", ticks: 20000,
+    want: { created: 177, completed: 164, p95: 2210, stuck: 0 } },
+  { name: "demo/starvation_biased", map: "maps/demo_loop.json",
+    scenario: "scenarios/baseline.json", policy: "starvation_biased", ticks: 20000,
+    want: { created: 170, completed: 156, p95: 2249, stuck: 0 } },
+  { name: "fab/default", map: "maps/fab.json",
+    scenario: "scenarios/fab.json", policy: "default", ticks: 60000,
+    want: { created: 161, completed: 131, p95: 12335, stuck: 0 } },
+];
 
 const M = { TICK: 0, CREATED: 1, COMPLETED: 2, THROUGHPUT: 3, MEAN_CYCLE: 4,
             P95: 5, UTIL: 6, BACKLOG: 7, DEADLOCKS: 8, STUCK: 9 };
@@ -36,9 +46,8 @@ function put(rel) {
 }
 
 let failures = 0;
-for (const [name, want] of Object.entries(EXPECTED)) {
-  const bufs = [put("maps/demo_loop.json"), put("scenarios/baseline.json"),
-                put(`policies/${name}.json`)];
+for (const { name, map, scenario, policy, ticks, want } of CASES) {
+  const bufs = [put(map), put(scenario), put(`policies/${policy}.json`)];
   const sim = e.oht_new(...bufs.flat());
   for (const [ptr, len] of bufs) e.oht_free_buf(ptr, len);
 
@@ -49,9 +58,9 @@ for (const [name, want] of Object.entries(EXPECTED)) {
     continue;
   }
 
-  e.oht_tick(sim, 20000);
+  e.oht_tick(sim, ticks);
   // Re-derived after ticking on purpose: growing wasm memory detaches any view
-  // taken earlier, and 20k ticks does grow it.
+  // taken earlier, and a run this long does grow it.
   const m = new Float64Array(e.memory.buffer, e.oht_metrics(sim), e.oht_metric_count());
   const got = { created: m[M.CREATED], completed: m[M.COMPLETED],
                 p95: m[M.P95], stuck: m[M.STUCK] };
