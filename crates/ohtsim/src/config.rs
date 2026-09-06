@@ -35,6 +35,16 @@ pub struct ScenarioConfig {
     pub arrival_per_1000: f32,
     /// Share of lots flagged hot.
     pub hot_fraction: f32,
+    /// Release control: the most lots allowed in the fab at once. A lot that
+    /// would arrive while the fab is at its cap is simply not released -- it
+    /// waits outside the line, which is what a real fab does.
+    ///
+    /// This is not a tuning nicety, it is what keeps the fab from deadlocking.
+    /// Every place a lot can rest is finite, and if enough lots are admitted to
+    /// fill all of them, the reentrant flow closes a cycle no amount of
+    /// buffering can open. `0` means no cap, and means the fab will eventually
+    /// stop.
+    pub wip_cap: usize,
     pub recipes: Vec<RecipeSpec>,
 }
 
@@ -45,6 +55,7 @@ impl Default for ScenarioConfig {
             vehicles: 8,
             vehicle_start_cells: Vec::new(),
             arrival_per_1000: 40.0,
+            wip_cap: 0,
             hot_fraction: 0.05,
             recipes: Vec::new(),
         }
@@ -156,6 +167,9 @@ pub fn load_scenario(src: &str, grid: &Grid) -> Result<ScenarioConfig, String> {
     }
     if let Some(v) = j.usize_at("vehicles") {
         s.vehicles = v;
+    }
+    if let Some(v) = j.usize_at("wip_cap") {
+        s.wip_cap = v;
     }
     if let Some(v) = j.f32_at("arrival_per_1000") {
         s.arrival_per_1000 = v;

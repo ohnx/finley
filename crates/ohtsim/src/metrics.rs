@@ -5,6 +5,9 @@
 pub struct Metrics {
     pub ticks: u64,
     pub lots_created: u64,
+    /// Arrivals refused because the fab was at its WIP cap. Demand that the
+    /// line declined to admit, as distinct from demand that never came.
+    pub arrivals_deferred: u64,
     pub lots_completed: u64,
     /// Cycle time (creation -> done) per completed lot, in ticks.
     pub cycle_times: Vec<u64>,
@@ -82,6 +85,7 @@ impl Metrics {
         let mut s = String::new();
         s.push_str(&format!("ticks                {}\n", self.ticks));
         s.push_str(&format!("lots created         {}\n", self.lots_created));
+        s.push_str(&format!("arrivals deferred    {}\n", self.arrivals_deferred));
         s.push_str(&format!("lots completed       {}\n", self.lots_completed));
         s.push_str(&format!(
             "throughput           {:.2} lots / 1000 ticks\n",

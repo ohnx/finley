@@ -59,8 +59,12 @@ one is there. Watching out-bays fill is watching backpressure arrive.
 
 The grey stations (`ohb_n`, `ohb_e`, `ohb_s`) are overhead hoist buffers. Their
 slots are neutral because a buffer has no direction — it is somewhere a finished
-lot can wait that is not another tool's port. Without them the reentrant recipes
-deadlock the fab; see `DESIGN.md`.
+lot can wait that is not another tool's port.
+
+Buffers are *not* what keeps the fab alive, though. That is `wip_cap` in the
+scenario: reentrant recipes will otherwise fill every port in the fab and
+deadlock it permanently, and no amount of storage prevents that — it only
+delays it. See `DESIGN.md` for the operating curve.
 
 Four tabs alongside:
 

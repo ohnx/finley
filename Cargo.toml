@@ -7,3 +7,8 @@ members = ["crates/ohtsim", "crates/ohtsim-wasm"]
 [profile.release]
 opt-level = 3
 lto = true
+
+# The integration tests run the simulation for hundreds of thousands of ticks,
+# which is minutes unoptimised and seconds optimised.
+[profile.test]
+opt-level = 2

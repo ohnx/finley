@@ -297,6 +297,22 @@ impl World {
             return;
         }
 
+        // Release control. Drawn *after* the arrival roll on purpose, so the
+        // random stream does not depend on how full the fab is: two runs with
+        // different caps still see the same demand at the same ticks, which is
+        // the only way a cap sweep compares like with like.
+        if self.scenario.wip_cap > 0 {
+            let wip = self
+                .lots
+                .iter()
+                .filter(|l| l.state != LotState::Done)
+                .count();
+            if wip >= self.scenario.wip_cap {
+                self.metrics.arrivals_deferred += 1;
+                return;
+            }
+        }
+
         let source_ids: Vec<MachineId> = self
             .machines
             .iter()

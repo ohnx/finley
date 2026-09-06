@@ -40,7 +40,7 @@ fn set_error(msg: String) {
 
 /// Number of `f64` slots in the metrics block. Keep in sync with `METRIC_*`
 /// below and with the reader in `web/app.js`.
-pub const METRIC_COUNT: usize = 13;
+pub const METRIC_COUNT: usize = 16;
 
 /// Where a lot currently sits. `LOT_AT_PORT` carries a machine and a port in
 /// `lot_a`/`lot_b`; the other two carry a machine or a vehicle in `lot_a`.
@@ -127,6 +127,9 @@ impl Sim {
                 .iter()
                 .filter(|v| !v.is_idle())
                 .count() as f64,
+            self.lots.id.len() as f64,                       // WIP now
+            self.world.scenario.wip_cap as f64,              // release cap
+            m.arrivals_deferred as f64,
         ];
     }
 

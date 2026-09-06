@@ -161,47 +161,96 @@ fn vehicles_do_not_stop_on_the_main_line_and_block_others() {
 
 /// The other kind of deadlock, and the one the demo map actually hits.
 ///
-/// Recipes are reentrant -- litho, etch, cmp, litho -- so with only tool ports
-/// to put lots on, the tools can end up holding finished lots for each other in
-/// a cycle: litho waits on etch, etch on cmp, cmp on litho, and nothing can ever
-/// move. Under the default policy it closed at around tick 12,000 and the fab
-/// stopped, with metrics that looked merely disappointing rather than broken.
+/// Recipes are reentrant -- litho, etch, cmp, litho -- and every place a lot can
+/// rest is finite: input ports, chambers, output ports, buffer slots. Admit
+/// enough lots to fill them all and the tools end up holding finished lots for
+/// each other in a cycle, litho waiting on etch, etch on cmp, cmp on litho, with
+/// nothing able to move. Uncapped it takes about 90,000 ticks to close and it is
+/// permanent: the fab completes 647 lots and then nothing, forever.
 ///
-/// Buffers break it by giving a finished lot somewhere to go that is not another
-/// tool's port.
+/// The fix is release control, not storage. Capping work in progress keeps the
+/// fab off the part of the curve where that can happen.
 #[test]
-fn buffers_prevent_the_resource_deadlock() {
+fn a_wip_cap_prevents_the_resource_deadlock() {
+    // Well past the ~90k where the uncapped fab dies.
+    const HORIZON: u64 = 100_000;
+
+    let mut capped_completed = 0;
     for policy in ["default", "starvation_biased"] {
-        let mut with = world(policy);
-        with.run(20_000);
+        let mut w = world(policy);
+        w.run(HORIZON);
         assert_eq!(
-            with.metrics.resource_deadlock_events, 0,
-            "{policy}: deadlocked despite buffers ({} ticks stuck)",
-            with.metrics.resource_deadlock_ticks
+            w.metrics.resource_deadlock_events, 0,
+            "{policy}: deadlocked at the shipped WIP cap ({} ticks stuck)",
+            w.metrics.resource_deadlock_ticks
         );
-
-        let (mut map, scen, pol) = fixtures(policy);
-        map.machines.retain(|m| !m.is_buffer());
-        let mut without = World::new(map, scen, pol);
-        without.run(20_000);
-        assert!(
-            without.metrics.lots_completed < with.metrics.lots_completed,
-            "{policy}: buffers should raise throughput ({} without, {} with)",
-            without.metrics.lots_completed,
-            with.metrics.lots_completed
-        );
-
-        // Only `default` is known to close the cycle inside 20k ticks;
-        // starvation_biased keeps the tools drained enough that it does not,
-        // at least on this map. Asserting it for both would be asserting
-        // something that is not true. This half matters because "no deadlock
-        // with buffers" would also pass with a detector that never fires.
         if policy == "default" {
-            assert!(
-                without.metrics.resource_deadlock_events > 0,
-                "removing the buffers should reopen the deadlock under default, \
-                 but the detector saw none -- detector or fallback is broken"
-            );
+            capped_completed = w.metrics.lots_completed;
         }
     }
+
+    // The other half: without the cap it dies. Asserting only the first half
+    // would also pass with a detector that never fires.
+    let (map, mut scen, pol) = fixtures("default");
+    scen.wip_cap = 0;
+    let mut uncapped = World::new(map, scen, pol);
+    uncapped.run(HORIZON);
+    assert!(
+        uncapped.metrics.resource_deadlock_events > 0,
+        "removing the WIP cap should reopen the deadlock, but the detector saw \
+         none -- detector or release control is broken"
+    );
+    // Terminally stuck, not briefly stalled: it froze around tick 90,000 and
+    // stays frozen, so the longer the horizon the wider the gap. Asserting the
+    // stuck time rather than a completion ratio, because at this horizon the
+    // uncapped fab has only just died and the ratio is still close.
+    assert!(
+        uncapped.metrics.resource_deadlock_ticks > 5_000,
+        "uncapped should be stuck for good, not momentarily: {} ticks",
+        uncapped.metrics.resource_deadlock_ticks
+    );
+    assert!(
+        uncapped.metrics.lots_completed < capped_completed,
+        "the cap should complete more lots: {} uncapped against {} capped",
+        uncapped.metrics.lots_completed,
+        capped_completed
+    );
+}
+
+/// What buffers are actually for, stated precisely.
+///
+/// They are *not* what prevents the deadlock -- at the shipped cap the fab
+/// completes the same number of lots with them and without. What they buy is
+/// tolerance: they widen the range of WIP settings that stay safe, so a cap set
+/// too high degrades instead of killing the fab. At a cap of 24 that is the
+/// difference between running and stopping.
+#[test]
+fn buffers_widen_the_safe_wip_range() {
+    let build = |cap: usize, buffers: bool| {
+        let (mut map, mut scen, pol) = fixtures("default");
+        if !buffers {
+            map.machines.retain(|m| !m.is_buffer());
+        }
+        scen.wip_cap = cap;
+        let mut w = World::new(map, scen, pol);
+        w.run(30_000);
+        w
+    };
+
+    // At a cap set too high, buffers are the difference between running and not.
+    let loose_with = build(24, true);
+    let loose_without = build(24, false);
+    assert_eq!(loose_with.metrics.resource_deadlock_events, 0);
+    assert!(
+        loose_without.metrics.resource_deadlock_events > 0,
+        "without buffers a cap of 24 should still deadlock; if it no longer \
+         does, the safe range moved and this test is measuring nothing"
+    );
+
+    // At the shipped cap they are not load-bearing, and saying so keeps anyone
+    // from mistaking them for the fix.
+    let tight_with = build(16, true);
+    let tight_without = build(16, false);
+    assert_eq!(tight_with.metrics.resource_deadlock_events, 0);
+    assert_eq!(tight_without.metrics.resource_deadlock_events, 0);
 }

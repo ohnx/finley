@@ -47,7 +47,7 @@ const AT_PORT = 0, IN_TRANSIT = 1, PROCESSING = 2, BLOCKED = 3;
 const M = {
   TICK: 0, CREATED: 1, COMPLETED: 2, THROUGHPUT: 3, MEAN_CYCLE: 4, P95: 5,
   UTIL: 6, MEAN_BACKLOG: 7, DEADLOCKS: 8, STUCK: 9, ROTATED: 10,
-  BACKLOG_NOW: 11, BUSY_NOW: 12,
+  BACKLOG_NOW: 11, BUSY_NOW: 12, WIP: 13, WIP_CAP: 14, DEFERRED: 15,
 };
 
 // Slider stop -> ticks advanced per animation frame. Sub-1 values are
@@ -767,7 +767,12 @@ function renderHistogram(canvas, cycles) {
 }
 
 function renderMetrics(m) {
+  const cap = m[M.WIP_CAP];
   const rows = [
+    // WIP first: it is the setting that decides whether the fab runs at all.
+    // Uncapped, the reentrant flow eventually fills every port and stops dead.
+    ["lots in fab (WIP)", cap ? `${fmt(m[M.WIP])} / ${fmt(cap)}` : fmt(m[M.WIP])],
+    ["arrivals deferred", fmt(m[M.DEFERRED])],
     ["lots created", fmt(m[M.CREATED])],
     ["lots completed", fmt(m[M.COMPLETED])],
     ["throughput", `${fmt(m[M.THROUGHPUT], 2)} /1k ticks`],

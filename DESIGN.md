@@ -244,11 +244,12 @@ Over 20 000 ticks, after the fix:
 
 | | default | starvation_biased |
 |---|---|---|
-| lots created | 168 | 177 |
-| completed | 144 | 165 |
-| p95 cycle | 3741 | 2448 |
-| utilisation | 49% | 94% |
-| mean backlog | 7.68 | 4.07 |
+| lots created | 163 | 173 |
+| arrivals deferred | 36 | 22 |
+| completed | 149 | 158 |
+| p95 cycle | 2594 | 2121 |
+| utilisation | 49% | 92% |
+| mean backlog | 4.57 | 3.10 |
 | deadlocks | 0 | 0 |
 | resource deadlocks | 0 | 0 |
 | stuck recoveries | 0 | 0 |
@@ -291,15 +292,16 @@ arrival rate until the fleet is the binding constraint rather than the source.
   deadlock — see below.
 - ~~No buffers or stockers.~~ Three overhead hoist buffers on the demo map,
   six slots. Still a good thing for the player to allocate: count and placement
-  are untuned.
+  are untuned, and they trade against the WIP cap rather than replacing it.
 - Dispatch's delivery-cost term seeds its distance field with an arbitrary legal
   heading, so it can be off by one curve. Immaterial for ranking.
 
 ## The deadlock that actually happened
 
-Reentrant recipes and one output port per tool are enough to deadlock the fab,
-and it is not a rare corner. Under the default policy the cycle closed at around
-tick 11,900 every run:
+Recipes are reentrant — litho, etch, cmp, litho — and every place a lot can rest
+is finite: input ports, chambers, output ports, buffer slots. Admit enough lots
+to fill them all and the tools end up holding finished lots for each other in a
+cycle:
 
 ```
 litho1/litho2  hold finished lots needing etch,  out-ports full
@@ -307,29 +309,54 @@ etch1/etch2    hold finished lots needing cmp,   out-ports full
 cmp1/cmp2      hold finished lots needing litho, out-ports full
 ```
 
-Nothing in transit, vehicles idle, jobs pending that can never be assigned
-because no destination input port can ever free. The metrics looked merely
-disappointing rather than broken, which is why it went unnoticed for so long.
+Nothing in transit, vehicles idle, jobs pending that can never be assigned. It
+is permanent: the fab completes 647 lots and then nothing, ever. The metrics
+look merely disappointing rather than broken, which is why it went unnoticed.
 
-**Buffers are the fix, and they are what real fabs use.** Overhead hoist buffers
-and under-track storage exist precisely so a finished lot has somewhere to go
-that is not another tool's port. The demo map now has three, six slots total,
-spread around the loop rather than pooled.
+**The fix is release control, not storage.** Buffers were tried first and were
+the wrong answer — they moved the failure from tick 12,000 to tick 90,000 and
+made it look fixed at any horizon short of that. Storage is finite too; filling
+it just takes longer.
 
-Two rules make them pay for themselves rather than cost throughput:
+Capping work in progress is what actually prevents it, and it is what real fabs
+do. The scenario now carries `wip_cap`: a lot that would arrive while the fab is
+at its cap is not released, and waits outside the line.
 
-- **Buffering must unblock something.** A lot is only sent to a buffer when no
-  tool of the kind it needs can take it *and* the tool it is sitting on has a
-  finished lot that cannot reach an output port. Without that second condition
-  every buffered lot costs two transport moves where one would do; on a fleet
-  already near saturation that is pure loss, and it cost `starvation_biased`
-  30 lots and doubled its p95 before the condition was added.
-- **A buffered lot is never re-buffered.** Otherwise two buffers pass it back
-  and forth while it makes no progress through its recipe.
+### The operating curve
 
-With both: zero resource deadlocks over 50 000 ticks under either policy, and
-throughput up from 85 to 144 lots for `default` and 159 to 165 for
-`starvation_biased`.
+Sweeping the cap over 300 000 ticks, default policy:
+
+| cap | completed | throughput | p95 cycle | mean WIP | deadlock |
+|---|---|---|---|---|---|
+| none | 647 | 2.16 | 5008 | 28.6 | **terminal** |
+| 8 | 1865 | 6.22 | 1481 | 7.2 | none |
+| 12 | 2290 | 7.63 | 1856 | 10.6 | none |
+| **16** | **2372** | **7.91** | 2636 | 14.2 | none |
+| 20 | 2329 | 7.76 | 3471 | 17.8 | none |
+| 24 | 2210 | 7.37 | 4488 | 22.0 | none |
+| 28 | 1096 | 3.65 | 5279 | 26.2 | **terminal** |
+
+This is the classic characteristic curve. Throughput peaks around 16 and then
+falls while cycle time keeps climbing — past the peak, extra WIP buys queueing
+and nothing else. The demo scenario ships at 16, which is also roughly what
+Little's law predicts from the bottleneck, and which leaves a wide margin below
+the ~28 where the fab dies.
+
+Capped at 16 the fab runs clean for **1 000 000 ticks** under both policies. The
+earlier claim that buffers fixed it rested on a 50 000-tick run, which was
+simply too short to see the failure — worth remembering before declaring this
+one fixed either.
+
+### What buffers are actually for
+
+Not this. At the shipped cap the fab completes the same number of lots with them
+and without (2372 against 2385 — marginally *better* without, since a buffered
+lot costs two transport moves where one would do).
+
+What they buy is tolerance. They widen the range of caps that stay safe: at a
+cap of 24 the fab runs with buffers and dies without. So they turn a
+badly-set cap into degraded throughput rather than a dead fab, which is worth
+having, and there is a test asserting exactly that and nothing more.
 
 ### A note on load ports
 
@@ -338,20 +365,20 @@ to four SEMI E15.1 load ports, and those are bidirectional: a FOUP docks at one,
 the EFEM robot moves wafers into the tool and returns them to the same FOUP on
 the same port, and the carrier sits there for the whole visit.
 
-Worth knowing, and worth not confusing with the deadlock. Switching to
-bidirectional load ports would *not* have fixed it — the cycle would just form
-on load ports instead of output ports. What breaks a circular wait is somewhere
-to put a lot that is not a tool port at all. The in/out split is kept for now
-because it is legible: a lot visibly moves from an in-bay to an out-bay, and
-backpressure is obvious on the map.
+Worth knowing, and worth not confusing with the deadlock. Bidirectional load
+ports would not have fixed it either — the cycle would form on load ports
+instead of output ports. The in/out split is kept for now because it is legible:
+a lot visibly moves from an in-bay to an out-bay, and backpressure is obvious on
+the map.
 
 ## Open questions
 
 1. **Retune the shipped policies so they show a tradeoff again** (see above).
    This is the one that decides whether the game premise holds up, and the UI
    now makes it possible to watch what each policy actually does.
-2. ~~Buffers and stockers, and a resource-deadlock detector.~~ Done. Buffer
-   count and placement are untuned, though, and are exactly the sort of thing
+2. ~~Buffers and stockers, and a resource-deadlock detector.~~ Done, along with
+   the WIP cap that is the actual fix. Cap, buffer count and buffer placement
+   are all untuned and all trade against each other — exactly the sort of thing
    the player should be deciding.
 3. Bidirectional load ports, to match real tools (see above). A model change,
    not a fix — the deadlock is already handled.
